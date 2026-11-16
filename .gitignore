@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Spotify giris bilgileri / anahtarlar ASLA commit'lenmez
+.falcon_audio/
+spotify*.json
+*secret*
+*.token
