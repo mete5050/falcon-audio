@@ -1714,7 +1714,8 @@ spotify = SpotifyClient()
 class SpotifyView(View):
     """Spotify 'su an calan' paneli: kapak, sarki/sanatci/albüm, ilerleme, kontrol dugmeleri."""
     name = "Spotify"
-    def __init__(self):
+    def __init__(self, src=None):
+        self.src = src or spotify
         W = QtWidgets.QWidget(); W.setObjectName("spotify")
         W.setStyleSheet(f"QWidget#spotify {{ background:{PANEL}; }} QLabel {{ background:transparent; }}")
         self.widget = W
@@ -1750,16 +1751,17 @@ class SpotifyView(View):
             b.setIcon(self.ic[k]); b.setIconSize(QtCore.QSize(18, 18))
             b.setFixedSize(46, 34); b.setStyleSheet("padding:0;"); btns.addWidget(b)
         btns.addStretch(1); col.addLayout(btns)
-        self.b_prev.clicked.connect(lambda: spotify.control("prev"))
-        self.b_next.clicked.connect(lambda: spotify.control("next"))
-        self.b_play.clicked.connect(lambda: spotify.control("pause" if self.playing else "play"))
+        self.b_prev.clicked.connect(lambda: self.src.control("prev"))
+        self.b_next.clicked.connect(lambda: self.src.control("next"))
+        self.b_play.clicked.connect(lambda: self.src.control("pause" if self.playing else "play"))
         self.status = QtWidgets.QLabel(""); self.status.setStyleSheet(f"color:{MUTED}; font-size:11px;")
         self.status.setWordWrap(True); col.addWidget(self.status)
-        self.extra = QtWidgets.QPushButton("BAGLAN"); self.extra.setToolTip("Spotify hesabina baglan")
-        self.extra.clicked.connect(self.connect)
         self.playing = False; self.art_key = None; self.last = None
-        if spotify.cfg.get("refresh_token"):
-            spotify.start()
+        if self.src is spotify:
+            self.extra = QtWidgets.QPushButton("BAGLAN"); self.extra.setToolTip("Spotify hesabina baglan")
+            self.extra.clicked.connect(self.connect)
+            if spotify.cfg.get("refresh_token"):
+                spotify.start()
     def connect(self):
         cid, ok = QtWidgets.QInputDialog.getText(
             self.widget, "Spotify'a baglan",
@@ -1773,10 +1775,11 @@ class SpotifyView(View):
         s = int(ms / 1000); return f"{s // 60}:{s % 60:02d}"
     def update(self, A):
         import time
-        s = spotify.get()
+        s = self.src.get()
         st = s.get("status", "")
         if st != "bagli" or not s.get("title"):
-            self.title.setText("Spotify" if st != "bagli" else "Şu an bir şey çalmıyor")
+            self.title.setText(("Spotify" if self.src is spotify else "Medya")
+                               if st != "bagli" else "Şu an bir şey çalmıyor")
             msg = {"baglanmadi": "Bağlı değil. Başlıktaki BAĞLAN düğmesine bas."}.get(st, st)
             self.status.setText(msg + ("  " + s.get("note", "") if s.get("note") else ""))
             if st != "bagli":
@@ -1800,8 +1803,198 @@ class SpotifyView(View):
             if not pm.isNull() and side > 10:
                 self.art.setPixmap(pm.scaled(side, side, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
 
+
+class MediaSessions:
+    """Windows medya oturumlari (SMTC): Spotify, Chrome/Edge'deki YouTube / YouTube Music,
+    YT Music masaustu, VLC... ne caliyorsa. Anahtar / giris yok. Ayri is parcaciginda asyncio dongusu."""
+    def __init__(self):
+        self.lk = threading.Lock(); self.state = {"status": "baslatiliyor"}
+        self.sources = []; self.pick = None          # None = Windows'un 'gecerli' oturumu
+        self.loop = None; self.running = False; self.art_cache = {}
+    def get(self):
+        with self.lk:
+            return dict(self.state)
+    def _set(self, **kw):
+        with self.lk:
+            self.state = {**self.state, **kw}
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        threading.Thread(target=self._run, daemon=True).start()
+    def _run(self):
+        import asyncio
+        self.loop = asyncio.new_event_loop()
+        try:
+            self.loop.run_until_complete(self._main())
+        except Exception as e:
+            self._set(status=f"medya oturumu kullanilamiyor: {e}")
+    async def _session(self):
+        ss = list(self.mgr.get_sessions())
+        self.sources = [s.source_app_user_model_id for s in ss]
+        if self.pick:
+            for s in ss:
+                if s.source_app_user_model_id == self.pick:
+                    return s
+        return self.mgr.get_current_session()
+    async def _main(self):
+        import asyncio, time, datetime
+        from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as M
+        from winrt.windows.storage.streams import Buffer, InputStreamOptions
+        self.mgr = await M.request_async()
+        while True:
+            try:
+                s = await self._session()
+                if s is None:
+                    self._set(status="bagli", title="", playing=False)
+                else:
+                    pr = await s.try_get_media_properties_async()
+                    tl = s.get_timeline_properties(); pb = s.get_playback_info()
+                    playing = pb.playback_status == 4
+                    pos = tl.position.total_seconds() * 1000
+                    if playing:                       # son guncellemeden bu yana gecen sure
+                        upd = tl.last_updated_time
+                        if upd and upd.year > 2000:
+                            pos += max(0, (datetime.datetime.now(datetime.timezone.utc) - upd).total_seconds() * 1000)
+                    dur = max(1, tl.end_time.total_seconds() * 1000)
+                    key = (pr.title, pr.artist, pr.album_title)
+                    if pr.thumbnail is not None and key not in self.art_cache:
+                        st = await pr.thumbnail.open_read_async(); n = st.size; buf = Buffer(n)
+                        await st.read_async(buf, n, InputStreamOptions.READ_AHEAD)
+                        self.art_cache = {key: bytes(memoryview(buf))}
+                    app = s.source_app_user_model_id.split("!")[-1].split(".")[0]
+                    self._set(status="bagli", title=pr.title or "", artist=pr.artist or "",
+                              album=(pr.album_title or "") + (f"   ·   {app}" if app else ""),
+                              playing=playing, progress=min(pos, dur), duration=dur,
+                              art=self.art_cache.get(key), t_fetch=time.time(), note="")
+            except Exception as e:
+                self._set(status=f"medya hatasi: {e}")
+            await asyncio.sleep(0.5)
+    def control(self, what):
+        import asyncio
+        async def go():
+            s = await self._session()
+            if s is None:
+                return
+            f = {"play": s.try_play_async, "pause": s.try_pause_async,
+                 "next": s.try_skip_next_async, "prev": s.try_skip_previous_async}[what]
+            ok = await f()
+            self._set(note="" if ok else "Bu uygulama bu kontrolu desteklemiyor")
+        if self.loop:
+            asyncio.run_coroutine_threadsafe(go(), self.loop)
+
+media = MediaSessions()
+
+class MediaView(SpotifyView):
+    """Her uygulamayla calisan 'su an calan' paneli (Windows medya oturumu).
+    Baslik menusu: Otomatik (Windows'un aktif oturumu) ya da belirli uygulama."""
+    name = "Medya (tum uygulamalar)"
+    def __init__(self):
+        super().__init__(src=media)
+        media.start()
+        self.extra = QtWidgets.QComboBox(); self.extra.addItem("Otomatik")
+        self.extra.setToolTip("Hangi uygulamanin medyasi gosterilsin")
+        self.extra.activated.connect(self.pick)
+        self.extra.installEventFilter(self.widget)      # acilmadan once listeyi tazelemek icin
+        self.n = 0
+    def pick(self, i):
+        media.pick = None if i == 0 else self.extra.itemText(i)
+    def update(self, A):
+        super().update(A)
+        self.n += 1
+        if self.n % 30 == 0 and not self.extra.view().isVisible():       # kaynak listesini tazele
+            have = [self.extra.itemText(i) for i in range(1, self.extra.count())]
+            if have != media.sources:
+                cur = self.extra.currentText()
+                self.extra.blockSignals(True); self.extra.clear(); self.extra.addItem("Otomatik")
+                self.extra.addItems(media.sources)
+                j = self.extra.findText(cur); self.extra.setCurrentIndex(max(0, j))
+                self.extra.blockSignals(False)
+
+class WindowCaptureView(View):
+    """Bir uygulamanin penceresini canli gosterir (Spotify Canvas / video icin).
+    PrintWindow(PW_RENDERFULLCONTENT) - pencere arkada kalabilir ama kucultulmus olmamali.
+    DRM korumali videolar siyah gorunebilir."""
+    name = "Pencere Yakalama"
+    APPS = [("Spotify", "spotify.exe"), ("Chrome", "chrome.exe"), ("Edge", "msedge.exe"),
+            ("Firefox", "firefox.exe"), ("YouTube Music", "youtube music.exe"), ("VLC", "vlc.exe")]
+    FPS = 20
+    def __init__(self):
+        self.widget = QtWidgets.QLabel("Pencere araniyor…"); self.widget.setAlignment(QtCore.Qt.AlignCenter)
+        self.widget.setStyleSheet(f"background:#000; color:{MUTED};")
+        self.widget.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
+        self.extra = QtWidgets.QComboBox(); self.extra.addItems([a for a, _ in self.APPS])
+        self.exe = self.APPS[0][1]
+        self.extra.currentIndexChanged.connect(lambda i: setattr(self, "exe", self.APPS[i][1]))
+        self.lk = threading.Lock(); self.frame = None; self.msg = ""; self.alive = True; self.size = (640, 360)
+        threading.Thread(target=self.loop, daemon=True).start()
+    def dispose(self):
+        self.alive = False
+    def find(self):
+        import win32gui, win32process, win32api, win32con
+        out = []
+        def cb(h, _):
+            if not win32gui.IsWindowVisible(h) or not win32gui.GetWindowText(h):
+                return True
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(h)
+                ph = win32api.OpenProcess(win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                name = win32process.GetModuleFileNameEx(ph, 0).lower(); win32api.CloseHandle(ph)
+                if name.endswith(self.exe):
+                    r = win32gui.GetClientRect(h); out.append((r[2] * r[3], h))
+            except Exception:
+                pass
+            return True
+        win32gui.EnumWindows(cb, None)
+        return max(out)[1] if out else None
+    def grab(self, h):
+        import ctypes, win32gui, win32ui
+        _, _, w, hh = win32gui.GetClientRect(h)
+        if w < 10 or hh < 10:
+            return None
+        hdc = win32gui.GetWindowDC(h); mdc = win32ui.CreateDCFromHandle(hdc); sdc = mdc.CreateCompatibleDC()
+        bmp = win32ui.CreateBitmap(); bmp.CreateCompatibleBitmap(mdc, w, hh); sdc.SelectObject(bmp)
+        try:
+            ctypes.windll.user32.PrintWindow(h, sdc.GetSafeHdc(), 3)      # CLIENTONLY | RENDERFULLCONTENT
+            bits = bmp.GetBitmapBits(True)
+        finally:
+            win32gui.DeleteObject(bmp.GetHandle()); sdc.DeleteDC(); mdc.DeleteDC(); win32gui.ReleaseDC(h, hdc)
+        img = QtGui.QImage(bits, w, hh, QtGui.QImage.Format_RGB32)
+        tw, th = self.size                                   # olcekleme is parcaciginda (QImage thread-safe)
+        return img.scaled(tw, th, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    def loop(self):
+        import time, win32gui
+        h, h_exe, last_find = None, None, 0.0
+        while self.alive:
+            t0 = time.time()
+            try:
+                if h is None or h_exe != self.exe or not win32gui.IsWindow(h) or t0 - last_find > 3:
+                    h, h_exe, last_find = self.find(), self.exe, t0
+                if h is None:
+                    msg, img = f"{self.exe} penceresi bulunamadi", None
+                elif win32gui.IsIconic(h):
+                    msg, img = "Pencere kucultulmus - geri ac (arkada kalmasi sorun degil)", None
+                else:
+                    msg, img = "", self.grab(h)
+                with self.lk:
+                    self.msg = msg
+                    if img is not None:
+                        self.frame = img
+            except Exception as e:
+                with self.lk:
+                    self.msg = f"yakalama hatasi: {e}"
+            time.sleep(max(0.0, 1 / self.FPS - (time.time() - t0)))
+    def update(self, A):
+        self.size = (max(16, self.widget.width()), max(16, self.widget.height()))
+        with self.lk:
+            img, msg, self.frame = self.frame, self.msg, None
+        if img is not None:
+            self.widget.setPixmap(QtGui.QPixmap.fromImage(img))
+        elif msg and self.widget.text() != msg:
+            self.widget.setPixmap(QtGui.QPixmap()); self.widget.setText(msg)
+
 VIEWS = [ScopeView, SpectrumView, ChromaView, NoteOctaveView, WaterfallView,
-         SpiralView, OctaveEnergyView, RhythmView, WideChromaView, MelodyView, DrumGridView, VUMeterView, AnalogVUView, CRTScopeView, LEDSpectrumView, DrumTrailView, SpotifyView]
+         SpiralView, OctaveEnergyView, RhythmView, WideChromaView, MelodyView, DrumGridView, VUMeterView, AnalogVUView, CRTScopeView, LEDSpectrumView, DrumTrailView, SpotifyView, MediaView, WindowCaptureView]
 
 # ---------------- PANEL + ARAYUZ ----------------
 class Panel(QtWidgets.QFrame):
