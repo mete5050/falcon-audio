@@ -1544,8 +1544,264 @@ class DrumTrailView(View):
         else:
             self.beats.setData([], []); self.bars.setData([], []); self.info.setText("Tempo araniyor…")
 
+
+# ---------------- SPOTIFY (Web API, OAuth PKCE) ----------------
+class SpotifyClient:
+    """Spotify Web API istemcisi. Giris: OAuth 'Authorization Code + PKCE' (sifre/secret yok).
+    Ayar + token: ~/.falcon_audio/spotify.json  (repo disinda - GitHub'a gitmez).
+    Arka plan is parcacigi ~1 sn'de bir 'su an calan'i ceker; arayuz sadece self.state'i okur."""
+    REDIRECT = "http://127.0.0.1:8888/callback"
+    SCOPES = "user-read-currently-playing user-read-playback-state user-modify-playback-state"
+    def __init__(self):
+        import os, json
+        self.dir = os.path.join(os.path.expanduser("~"), ".falcon_audio")
+        self.path = os.path.join(self.dir, "spotify.json")
+        self.cfg = {}
+        try:
+            self.cfg = json.load(open(self.path, encoding="utf8"))
+        except Exception:
+            pass
+        self.lk = threading.Lock()
+        self.state = {"status": "baglanmadi" if not self.cfg.get("refresh_token") else "baglaniyor"}
+        self.art_cache = {}
+        self.running = False
+    # ---- kalici ayar ----
+    def save(self):
+        import os, json
+        os.makedirs(self.dir, exist_ok=True)
+        with open(self.path, "w", encoding="utf8") as f:
+            json.dump(self.cfg, f)
+    # ---- http ----
+    def _req(self, method, url, data=None, headers=None, form=False):
+        import urllib.request, urllib.parse, json
+        body = None
+        h = dict(headers or {})
+        if data is not None:
+            if form:
+                body = urllib.parse.urlencode(data).encode(); h["Content-Type"] = "application/x-www-form-urlencoded"
+            else:
+                body = json.dumps(data).encode(); h["Content-Type"] = "application/json"
+        elif method in ("PUT", "POST"):
+            body = b""
+        r = urllib.request.Request(url, data=body, headers=h, method=method)
+        try:
+            with urllib.request.urlopen(r, timeout=8) as resp:
+                raw = resp.read()
+                return resp.status, (json.loads(raw) if raw else None)
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read() or b"null")
+            except Exception:
+                return e.code, None
+    # ---- giris (PKCE) ----
+    def login(self, client_id):
+        """Tarayicida Spotify izin sayfasini acar, 127.0.0.1:8888'de donusu bekler."""
+        threading.Thread(target=self._login, args=(client_id.strip(),), daemon=True).start()
+    def _login(self, client_id):
+        import secrets, hashlib, base64, urllib.parse, webbrowser, http.server
+        self._set(status="giris bekleniyor (tarayicida izin ver)")
+        verifier = secrets.token_urlsafe(64)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        st = secrets.token_urlsafe(16)
+        url = "https://accounts.spotify.com/authorize?" + urllib.parse.urlencode(dict(
+            client_id=client_id, response_type="code", redirect_uri=self.REDIRECT,
+            code_challenge_method="S256", code_challenge=challenge, scope=self.SCOPES, state=st))
+        got = {}
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(s):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(s.path).query)
+                got.update({k: v[0] for k, v in q.items()})
+                s.send_response(200); s.send_header("Content-Type", "text/html; charset=utf-8"); s.end_headers()
+                ok = "code" in q
+                s.wfile.write(("<h2 style='font-family:sans-serif'>" +
+                               ("FALCON//AUDIO Spotify'a baglandi. Bu sekmeyi kapatabilirsin." if ok
+                                else "Baglanti reddedildi.") + "</h2>").encode())
+            def log_message(s, *a): pass
+        try:
+            srv = http.server.HTTPServer(("127.0.0.1", 8888), H)
+        except OSError:
+            self._set(status="hata: 8888 portu kullanimda"); return
+        srv.timeout = 180
+        webbrowser.open(url)
+        srv.handle_request(); srv.server_close()
+        if got.get("state") != st or "code" not in got:
+            self._set(status="giris iptal / reddedildi: " + got.get("error", "zaman asimi")); return
+        code, tok = self._req("POST", "https://accounts.spotify.com/api/token", form=True, data=dict(
+            grant_type="authorization_code", code=got["code"], redirect_uri=self.REDIRECT,
+            client_id=client_id, code_verifier=verifier))
+        if code != 200 or not tok:
+            self._set(status=f"token alinamadi ({code}): {tok}"); return
+        self.cfg.update(client_id=client_id, refresh_token=tok.get("refresh_token"))
+        self.access, self.exp = tok["access_token"], self._now() + tok.get("expires_in", 3600) - 60
+        self.save(); self._set(status="bagli")
+        self.start()
+    # ---- token ----
+    @staticmethod
+    def _now():
+        import time; return time.time()
+    def token(self):
+        if getattr(self, "access", None) and self._now() < self.exp:
+            return self.access
+        if not self.cfg.get("refresh_token"):
+            return None
+        code, tok = self._req("POST", "https://accounts.spotify.com/api/token", form=True, data=dict(
+            grant_type="refresh_token", refresh_token=self.cfg["refresh_token"], client_id=self.cfg["client_id"]))
+        if code != 200 or not tok:
+            self._set(status=f"oturum yenilenemedi ({code}) - yeniden baglan"); return None
+        self.access, self.exp = tok["access_token"], self._now() + tok.get("expires_in", 3600) - 60
+        if tok.get("refresh_token"):                         # Spotify yenisini verebilir
+            self.cfg["refresh_token"] = tok["refresh_token"]; self.save()
+        return self.access
+    def api(self, method, path, data=None):
+        tk = self.token()
+        if not tk:
+            return None, None
+        return self._req(method, "https://api.spotify.com/v1" + path, data=data,
+                         headers={"Authorization": "Bearer " + tk})
+    # ---- yoklama ----
+    def _set(self, **kw):
+        with self.lk:
+            self.state = {**self.state, **kw}
+    def get(self):
+        with self.lk:
+            return dict(self.state)
+    def start(self):
+        if not self.running:
+            self.running = True
+            threading.Thread(target=self._poll, daemon=True).start()
+    def _poll(self):
+        import time, urllib.request
+        while True:
+            try:
+                code, js = self.api("GET", "/me/player/currently-playing?additional_types=episode")
+                if code == 200 and js and js.get("item"):
+                    it = js["item"]
+                    imgs = (it.get("album") or it.get("show") or {}).get("images") or []
+                    art_url = imgs[0]["url"] if imgs else None
+                    if art_url and art_url not in self.art_cache:
+                        self.art_cache = {art_url: urllib.request.urlopen(art_url, timeout=8).read()}
+                    self._set(status="bagli", title=it.get("name", ""),
+                              artist=", ".join(a["name"] for a in it.get("artists", [])) or
+                                     (it.get("show") or {}).get("publisher", ""),
+                              album=(it.get("album") or {}).get("name", ""),
+                              playing=js.get("is_playing", False), progress=js.get("progress_ms", 0),
+                              duration=it.get("duration_ms", 1), art=self.art_cache.get(art_url),
+                              t_fetch=time.time())
+                elif code in (200, 204):
+                    self._set(status="bagli", title="", playing=False)
+                elif code is not None:
+                    self._set(status=f"API hatasi {code}")
+            except Exception as e:
+                self._set(status=f"ag hatasi: {e}")
+            time.sleep(1.0)
+    def control(self, what):
+        def go():
+            path = {"play": ("PUT", "/me/player/play"), "pause": ("PUT", "/me/player/pause"),
+                    "next": ("POST", "/me/player/next"), "prev": ("POST", "/me/player/previous")}[what]
+            code, js = self.api(*path)
+            if code == 403:
+                self._set(note="Kontrol icin Spotify Premium gerekli")
+            elif code == 404:
+                self._set(note="Aktif Spotify cihazi yok")
+            elif code and code >= 300:
+                self._set(note=f"Kontrol hatasi {code}")
+            else:
+                self._set(note="")
+        threading.Thread(target=go, daemon=True).start()
+
+spotify = SpotifyClient()
+
+class SpotifyView(View):
+    """Spotify 'su an calan' paneli: kapak, sarki/sanatci/albüm, ilerleme, kontrol dugmeleri."""
+    name = "Spotify"
+    def __init__(self):
+        W = QtWidgets.QWidget(); W.setObjectName("spotify")
+        W.setStyleSheet(f"QWidget#spotify {{ background:{PANEL}; }} QLabel {{ background:transparent; }}")
+        self.widget = W
+        lay = QtWidgets.QHBoxLayout(W); lay.setContentsMargins(10, 8, 10, 8); lay.setSpacing(14)
+        self.art = QtWidgets.QLabel(); self.art.setAlignment(QtCore.Qt.AlignCenter)
+        self.art.setMinimumSize(90, 90); self.art.setStyleSheet(f"border:1px solid {LINE};")
+        self.art.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        lay.addWidget(self.art, 2)
+        col = QtWidgets.QVBoxLayout(); col.setSpacing(4); lay.addLayout(col, 5)
+        self.title = QtWidgets.QLabel("—"); self.title.setStyleSheet(f"color:{FG}; font-size:20px; font-weight:bold;")
+        self.artist = QtWidgets.QLabel(""); self.artist.setStyleSheet(f"color:{RED_BRIGHT}; font-size:14px;")
+        self.album = QtWidgets.QLabel(""); self.album.setStyleSheet(f"color:{MUTED}; font-size:12px;")
+        for w in (self.title, self.artist, self.album):
+            w.setWordWrap(True); col.addWidget(w)
+        col.addStretch(1)
+        self.bar = QtWidgets.QProgressBar(); self.bar.setRange(0, 1000); self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(6)
+        self.bar.setStyleSheet(f"QProgressBar {{ background:{PANEL2}; border:none; border-radius:3px; }}"
+                               f"QProgressBar::chunk {{ background:{RED}; border-radius:3px; }}")
+        col.addWidget(self.bar)
+        tl = QtWidgets.QHBoxLayout(); self.t0 = QtWidgets.QLabel("0:00"); self.t1 = QtWidgets.QLabel("0:00")
+        for w in (self.t0, self.t1):
+            w.setStyleSheet(f"color:{MUTED}; font-size:11px;")
+        tl.addWidget(self.t0); tl.addStretch(1); tl.addWidget(self.t1); col.addLayout(tl)
+        btns = QtWidgets.QHBoxLayout(); btns.addStretch(1)
+        # emoji glifleri Windows'ta mavi emoji olarak cikiyor -> Qt'nin standart medya simgeleri
+        sty = QtWidgets.QApplication.style()
+        self.ic = {k: sty.standardIcon(getattr(QtWidgets.QStyle, v)) for k, v in
+                   dict(prev="SP_MediaSkipBackward", play="SP_MediaPlay", pause="SP_MediaPause",
+                        next="SP_MediaSkipForward").items()}
+        self.b_prev, self.b_play, self.b_next = (QtWidgets.QPushButton() for _ in range(3))
+        for b, k in ((self.b_prev, "prev"), (self.b_play, "play"), (self.b_next, "next")):
+            b.setIcon(self.ic[k]); b.setIconSize(QtCore.QSize(18, 18))
+            b.setFixedSize(46, 34); b.setStyleSheet("padding:0;"); btns.addWidget(b)
+        btns.addStretch(1); col.addLayout(btns)
+        self.b_prev.clicked.connect(lambda: spotify.control("prev"))
+        self.b_next.clicked.connect(lambda: spotify.control("next"))
+        self.b_play.clicked.connect(lambda: spotify.control("pause" if self.playing else "play"))
+        self.status = QtWidgets.QLabel(""); self.status.setStyleSheet(f"color:{MUTED}; font-size:11px;")
+        self.status.setWordWrap(True); col.addWidget(self.status)
+        self.extra = QtWidgets.QPushButton("BAGLAN"); self.extra.setToolTip("Spotify hesabina baglan")
+        self.extra.clicked.connect(self.connect)
+        self.playing = False; self.art_key = None; self.last = None
+        if spotify.cfg.get("refresh_token"):
+            spotify.start()
+    def connect(self):
+        cid, ok = QtWidgets.QInputDialog.getText(
+            self.widget, "Spotify'a baglan",
+            "developer.spotify.com/dashboard'da olusturdugun uygulamanin Client ID'si:\n"
+            "(Redirect URI olarak  http://127.0.0.1:8888/callback  ekli olmali)",
+            text=spotify.cfg.get("client_id", ""))
+        if ok and cid.strip():
+            spotify.login(cid)
+    @staticmethod
+    def fmt(ms):
+        s = int(ms / 1000); return f"{s // 60}:{s % 60:02d}"
+    def update(self, A):
+        import time
+        s = spotify.get()
+        st = s.get("status", "")
+        if st != "bagli" or not s.get("title"):
+            self.title.setText("Spotify" if st != "bagli" else "Şu an bir şey çalmıyor")
+            msg = {"baglanmadi": "Bağlı değil. Başlıktaki BAĞLAN düğmesine bas."}.get(st, st)
+            self.status.setText(msg + ("  " + s.get("note", "") if s.get("note") else ""))
+            if st != "bagli":
+                self.artist.setText(""); self.album.setText("")
+            return
+        prog = s["progress"] + ((time.time() - s["t_fetch"]) * 1000 if s["playing"] else 0)
+        prog = min(prog, s["duration"])
+        key = (s["title"], s["artist"], s["playing"])
+        if key != self.last:
+            self.last = key
+            self.title.setText(s["title"]); self.artist.setText(s["artist"]); self.album.setText(s["album"])
+            self.playing = s["playing"]; self.b_play.setIcon(self.ic["pause" if self.playing else "play"])
+        self.bar.setValue(int(1000 * prog / max(1, s["duration"])))
+        self.t0.setText(self.fmt(prog)); self.t1.setText(self.fmt(s["duration"]))
+        self.status.setText(s.get("note", ""))
+        if s.get("art") and id(s["art"]) != self.art_key or (self.art_key and self.art.pixmap() and
+                                                               self.art.pixmap().width() != min(self.art.width(), self.art.height())):
+            self.art_key = id(s.get("art"))
+            pm = QtGui.QPixmap(); pm.loadFromData(s["art"] or b"")
+            side = min(self.art.width(), self.art.height())
+            if not pm.isNull() and side > 10:
+                self.art.setPixmap(pm.scaled(side, side, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+
 VIEWS = [ScopeView, SpectrumView, ChromaView, NoteOctaveView, WaterfallView,
-         SpiralView, OctaveEnergyView, RhythmView, WideChromaView, MelodyView, DrumGridView, VUMeterView, AnalogVUView, CRTScopeView, LEDSpectrumView, DrumTrailView]
+         SpiralView, OctaveEnergyView, RhythmView, WideChromaView, MelodyView, DrumGridView, VUMeterView, AnalogVUView, CRTScopeView, LEDSpectrumView, DrumTrailView, SpotifyView]
 
 # ---------------- PANEL + ARAYUZ ----------------
 class Panel(QtWidgets.QFrame):
