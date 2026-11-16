@@ -2347,8 +2347,16 @@ def choose_device(parent=None):
         return None
     return devs[lst.currentRow()][1]
 
+try:   # gorev cubugunda python.exe yerine uygulamanin kendi simgesi gorunsun
+    import ctypes
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Falcon.Audio.Visualizer")
+except Exception:
+    pass
 app = QtWidgets.QApplication([])
 app.setStyleSheet(QSS)
+_ico = __import__("os").path.join(__import__("os").path.expanduser("~"), ".falcon_audio", "icon.ico")
+if __import__("os").path.exists(_ico):
+    app.setWindowIcon(QtGui.QIcon(_ico))
 import os
 AUTOTEST = os.environ.get("SCOPE_AUTOTEST")          # test: dialogsuz baslat, 5 sn sonra kapan
 first = list_devices()[0][1] if AUTOTEST else choose_device()
