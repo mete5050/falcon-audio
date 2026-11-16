@@ -170,6 +170,12 @@ class BeatTracker:
             self.hist = [[], [], [], []]
             self.last_hit = [0.0, 0.0, 0.0, 0.0]
             self.bpm = None; self.beat0 = None; self.last_tempo = 0.0
+            self.kpend = []           # kick adaylari: [t, guc, tepe_db, klik_var, kare_sayaci]
+    def add_hit(self, t, i, st):
+        """Zamana gore sirali ekle (kick'ler ~90 ms gecikmeyle ama kendi zamaniyla gelir)."""
+        import bisect
+        j = bisect.bisect(self.hits, (t, i)); self.hits.insert(j, (t, i))
+        j = bisect.bisect(self.hits_s, (t, i, st)); self.hits_s.insert(j, (t, i, st))
     def setup(self):
         self.rate = RATE
         self.N = 1024; self.H = 512
@@ -215,8 +221,26 @@ class BeatTracker:
                     if i == 1 and (flux[3] < 0.6 * thr[3] or dE[3] < 0.15 * dE[2]):
                         continue
                     if flux[i] > thr[i] and db[i] > -55 and t - self.last_hit[i] > gap:
-                        self.last_hit[i] = t; self.hits.append((t, i))
-                        self.hits_s.append((t, i, float(min(1.0, flux[i] / (2.5 * thr[i])))))
+                        self.last_hit[i] = t
+                        st = float(min(1.0, flux[i] / (2.5 * thr[i])))
+                        if i == 0:
+                            # KICK adayi: bas notasi da ayni sekilde yukselir. ~90 ms bekle:
+                            # kick hizla soner (+ cogunlukla 1.5-5 kHz 'klik' atagi vardir), bas surer
+                            self.kpend.append([t, st, db[0], flux[3] > 0.6 * thr[3], 0])
+                        else:
+                            self.add_hit(t, i, st)
+                # bekleyen kick adaylarini sonuclandir
+                keep = []
+                for c in self.kpend:
+                    c[4] += 1
+                    if c[4] <= 2:
+                        c[2] = max(c[2], db[0])          # tepe: ilk birkac kare
+                    if t - c[0] < 0.09:
+                        keep.append(c); continue
+                    decay = c[2] - db[0]
+                    if (c[3] and decay >= 3.0) or decay >= 6.0:
+                        self.add_hit(c[0], 0, c[1])
+                self.kpend = keep
                 self.hits = [hv for hv in self.hits if t - hv[0] < 10]
                 self.hits_s = [hv for hv in self.hits_s if t - hv[0] < 10]
                 self.env.append(float(np.dot(self.W, flux[:3])))
@@ -918,14 +942,18 @@ class DrumGridView(View):
         bar0 = beat0 + self.down * beat
         step = beat / 4
         # yeni vuruslari KENDI zaman damgalariyla yerlestir
+        seen = getattr(self, "seen", None)
+        if seen is None:
+            seen = self.seen = set()
         for t, b in hits:
-            if t <= self.last_t:
+            if (t, b) in seen:
                 continue
+            seen.add((t, b))
             p = int(round((t - bar0) / step))
             if self.bar is not None and p // 16 >= self.bar:
                 self.grid[2 - b, p % 16] = 1.0; self.dirty = True
-        if hits:
-            self.last_t = max(self.last_t, hits[-1][0])
+        if len(seen) > 400:                               # tracker 10 sn tutuyor; eskileri unut
+            self.seen = {h for h in seen if h[0] > now - 12}
         pos = (now - bar0) / step
         bar = int(pos // 16)
         if bar != self.bar:
