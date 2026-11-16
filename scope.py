@@ -759,11 +759,12 @@ class MelodyView(View):
                                            for m in range(self.LO, self.HI + 1) if "#" not in NOTES[m % 12]],
                                           [(m, "") for m in range(self.LO, self.HI + 1)]])
         self.pl.showGrid(x=True, y=True, alpha=0.12)
-        self.line = self.pl.plot(pen=pg.mkPen(*rgb(RED), 110, width=1), connect="finite")
+        self.glow = self.pl.plot(pen=pg.mkPen(*rgb(RED), 70, width=5), connect="finite")
+        self.line = self.pl.plot(pen=pg.mkPen(*rgb(RED_BRIGHT), 230, width=1.6), connect="finite", antialias=True)
         self.dots = pg.ScatterPlotItem(pen=None, size=4)
         self.pl.addItem(self.dots)
-        # genlige gore renk: koyu kirmizi -> parlak kirmizi -> beyaz (onbellekli)
-        self.b = np.array([pg.mkBrush(*[int(c) for c in LUT[int(70 + 185 * i / 15)][:3]])
+        # genlige gore renk: sonuk koyu -> parlak vurgu -> beyaz (onbellekli, 16 kademe)
+        self.b = np.array([pg.mkBrush(*[int(c) for c in LUT[int(40 + 215 * i / 15)][:3]])
                            for i in range(16)], dtype=object)
         self.head = pg.ScatterPlotItem(pen=pg.mkPen(RED_BRIGHT, width=2), brush=pg.mkBrush(255, 255, 255), size=11)
         self.pl.addItem(self.head)
@@ -777,7 +778,8 @@ class MelodyView(View):
             for ax in ("left", "bottom"):
                 a = self.pl.getAxis(ax); a.setPen(pg.mkPen("#8a6a44")); a.setTextPen(pg.mkPen("#4a3420"))
             self.pl.showGrid(x=True, y=True, alpha=0.35)
-            self.line.setPen(pg.mkPen(*ink, 200, width=1.4))
+            self.line.setPen(pg.mkPen(*ink, 220, width=1.6))
+            self.glow.setPen(pg.mkPen(*ink, 40, width=5))
             self.b = np.array([pg.mkBrush(*ink, int(70 + 185 * i / 15)) for i in range(16)], dtype=object)
             self.head.setPen(pg.mkPen("#7a1010", width=2)); self.head.setBrush(pg.mkBrush(*ink))
             self.lbl.setColor("#2a1c0e"); self.vib.setColor("#9a1a10")
@@ -823,7 +825,7 @@ class MelodyView(View):
         now = (total - PitchTracker.N / 2) / RATE
         tr = self.pt.since(now - self.SPAN)
         if not tr:
-            self.line.setData([], []); self.dots.setData([], []); self.head.hide(); return
+            self.line.setData([], []); self.glow.setData([], []); self.dots.setData([], []); self.head.hide(); return
         a = np.array(tr); t, m, c, s = a[:, 0], a[:, 1], a[:, 2], a[:, 3]
         ok = c > self.CONF
         t, m, s = t[ok], m[ok], s[ok]
@@ -832,12 +834,22 @@ class MelodyView(View):
         t, m, s = self.clean(t, m, s)
         if len(t) < 2:
             self.head.hide(); return
-        brk = np.nonzero((np.diff(t) > 0.06) | (np.abs(np.diff(m)) > 0.8))[0] + 1
+        # kesinti: 150 ms'den uzun bosluk ya da 1 yari tondan buyuk sicrama (kisa bosluklar birlesir)
+        brk = np.nonzero((np.diff(t) > 0.15) | (np.abs(np.diff(m)) > 1.0))[0] + 1
+        # cizgi icin hafif yumusatma (her parcada 5'li hareketli ortalama) - vibrato korunur
+        ms = m.copy()
+        for a_, b_ in zip(np.r_[0, brk], np.r_[brk, len(m)]):
+            if b_ - a_ >= 5:
+                seg = m[a_:b_]; k = np.ones(5) / 5
+                ms[a_ + 2:b_ - 2] = np.convolve(seg, k, mode="valid")
         x = t - now
-        xs = np.insert(x, brk, np.nan); ys = np.insert(m, brk, np.nan)
-        self.line.setData(xs, ys)
-        q = np.clip((s * 15 * 1.6).astype(int), 0, 15)
-        self.dots.setData(x, m, brush=self.b[q])
+        xs = np.insert(x, brk, np.nan); ys = np.insert(ms, brk, np.nan)
+        self.line.setData(xs, ys); self.glow.setData(xs, ys)
+        # kontrast: gucu gorunen penceredeki %10-%95 araligina yay, gamma ile ayrisma artir
+        lo, hi = np.percentile(s, 10), np.percentile(s, 95)
+        sn = np.clip((s - lo) / max(1e-6, hi - lo), 0, 1) ** 0.8
+        q = (sn * 15).astype(int)
+        self.dots.setData(x, ms, brush=self.b[q], size=np.round((2.5 + sn * 6) * 2) / 2)   # yarim px kademe: sembol onbellegi
         live = now - t[-1] < 0.06
         if live:
             self.head.setData([x[-1]], [m[-1]]); self.head.show()
