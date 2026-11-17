@@ -2160,7 +2160,7 @@ class PianoView(View):
         self.acc = 0.0; self.clk = QtCore.QElapsedTimer(); self.clk.start()
         self.level = np.zeros(128); self.top = None
         self.on_cnt = np.zeros(128, int); self.off_cnt = np.zeros(128, int); self.active = np.zeros(128, bool)
-        self.x_nmf = np.full(128, 1e-3)
+        self.x_nmf = np.full(128, 1e-3); self.onsets = 0
         self.roll = np.zeros((self.ROWS, 128), dtype=np.float32)
         self.lut = np.zeros((256, 4), dtype=np.uint8); self.lut[:, :3] = LUT[:, :3]; self.lut[:, 3] = 255
         self.lut[0] = (*rgb(PANEL), 255)
@@ -2224,10 +2224,45 @@ class PianoView(View):
         if mode == "Filtre":
             return self.stabilize(self.harm_filter(self.raw(semi)))
         return self.stabilize(self.nmf(A["semi_lin"]))
+    def onset_scan(self):
+        """Son guncellemeden beri gelen sesi 10 ms adimlarla tara; her nota icin enerji
+        son ~30 ms'nin en dususunun 1.6 katini gecerse yeni vurus."""
+        flags = np.zeros(128, bool)
+        if getattr(self, "o_rate", None) != RATE:
+            self.o_rate = RATE; self.oW = 1 << int(round(np.log2(RATE * 0.03)))   # ~21-43 ms
+            self.oH = RATE // 100; self.oP = None; self.oWin = np.hanning(self.oW)
+            f = np.fft.rfftfreq(self.oW * 4, 1 / RATE)
+            m = np.round(69 + 12 * np.log2(np.maximum(f, 1) / 440)).astype(int)
+            ok = (f > 60) & (m >= 0) & (m < 128)
+            self.oBin = np.nonzero(ok)[0]; self.oMid = m[ok]
+            self.oHist = np.zeros((7, 128)); self.oCool = np.zeros(128)
+        if self.oP is None or total - self.oP > RATE // 2:
+            self.oP = total - self.oW
+        steps = 0
+        while self.oP + self.oW <= total and steps < 50:
+            x = read_abs(self.oP, self.oW); self.oP += self.oH; steps += 1
+            if x is None:
+                continue
+            s = np.abs(np.fft.rfft(x * self.oWin, self.oW * 4)) ** 2
+            E = np.zeros(128); np.add.at(E, self.oMid, s[self.oBin])
+            # 30-70 ms onceki pencerelerin EN YUKSEGI ile kiyas: vibrato/vuru dalgalanmasi asamaz,
+            # sonmekte olan notanin yeniden basilmasi asar
+            ref = self.oHist[2:5].max(0)
+            hit = (E > 1.6 * ref + 1e-10) & (E > 0.02 * E.max()) & (self.oCool <= 0)
+            self.oCool = np.where(hit, 6, self.oCool - 1)              # ayni nota 60 ms kilit
+            flags |= hit
+            self.oHist = np.roll(self.oHist, 1, 0); self.oHist[0] = E
+        return flags
     def update(self, A):
         semi = A["semi"]
         v = self.notes(A)
-        self.level = np.maximum(v, self.level * 0.6)
+        # --- yeniden basis: kisa pencereli (~40 ms) nota enerjisi, 10 ms adim, FPS'ten bagimsiz
+        # nota "aktif" olmadan (2 kare) once gelen vuruslari ~80 ms beklet
+        self.pend = np.where(self.onset_scan(), 4, np.maximum(getattr(self, "pend", np.zeros(128)) - 1, 0))
+        ons = (self.pend > 0) & (v > 0); self.pend[ons] = 0
+        self.onsets += int(ons.sum())
+        self.level = np.maximum(v, self.level * 0.45)
+        self.level[ons] = 1.0                                  # vurusta tus parlar
         k = int(np.argmax(v)); self.top = k if v[k] > 0.5 and self.lo <= k <= self.hi else None
         # zaman tabanli kayma: FPS'ten bagimsiz, saniyede ROWS / sure satir
         rps = self.ROWS / self.SPEEDS[self.c_speed.currentIndex()]
@@ -2238,6 +2273,10 @@ class PianoView(View):
             self.roll[n:] = self.roll[:-n].copy(); self.roll[:n] = v      # 0. satir = simdi (altta)
         else:
             self.roll[0] = np.maximum(self.roll[0], v)                  # ayni satira birlestir
+        if ons.any():                                                  # vurus: once kisa bosluk, sonra parlak bas
+            gap = max(2, self.ROWS // 110)
+            self.roll[min(n, self.ROWS - 1):min(n, self.ROWS - 1) + gap, ons] = 0
+            self.roll[0, ons] = 1.0
         idx = (np.clip(self.roll[::-1], 0, 1) * 255).astype(np.uint8)  # ust = eski
         rgba = self.lut[idx]
         self.img = QtGui.QImage(rgba.tobytes(), 128, self.ROWS, 128 * 4, QtGui.QImage.Format_RGBA8888).copy()
