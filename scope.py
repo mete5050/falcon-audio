@@ -114,7 +114,7 @@ def open_stream(dev):
                     stream_callback=cb)
     print(f"Yakalanan cihaz: {dev['name']}  {RATE} Hz, {CH} kanal")
 
-RING = 65536
+RING = 1 << 18           # ~5.5 sn @48k (Piyano Model modu 2 sn gecmis ister)
 ring = np.zeros((RING, 2), dtype=np.float32)
 widx = 0
 filled = 0
