@@ -2134,6 +2134,7 @@ class PianoView(View):
     RANGES = [("61 tus C2-C7", 36, 96), ("49 tus C3-C7", 48, 96), ("37 tus C3-C6", 48, 84),
               ("88 tus A0-C8", 21, 108)]
     MODES = ["NMF", "Filtre", "Ham"]          # NMF varsayilan: testte en dogru
+    SPEEDS = [8, 5, 3, 2, 1]                   # rulonun gosterdigi sure (sn); varsayilan 3
     ROWS = 220
     MAXN = 6                      # ayni anda en fazla tus
     HARM = (12, 19, 24, 28, 31)   # 2., 3., 4., 5., 6. harmoniklerin yari-ton mesafesi
@@ -2145,8 +2146,12 @@ class PianoView(View):
         self.c_rng.currentIndexChanged.connect(lambda i: self.set_range(*self.RANGES[i][1:]))
         self.c_mode = QtWidgets.QComboBox(); self.c_mode.addItems(self.MODES)
         self.c_mode.setToolTip("Ham: tum tepeler | Filtre: harmonikleri ele | NMF: harmonik sablon cozumu")
-        bl.addWidget(self.c_rng); bl.addWidget(self.c_mode)
+        self.c_speed = QtWidgets.QComboBox()
+        self.c_speed.addItems([f"{s} sn" for s in self.SPEEDS]); self.c_speed.setCurrentIndex(2)
+        self.c_speed.setToolTip("Rulonun gosterdigi sure: kisa = notalar daha hizli akar")
+        bl.addWidget(self.c_rng); bl.addWidget(self.c_mode); bl.addWidget(self.c_speed)
         self.extra = box
+        self.acc = 0.0; self.clk = QtCore.QElapsedTimer(); self.clk.start()
         self.level = np.zeros(128); self.top = None
         self.on_cnt = np.zeros(128, int); self.off_cnt = np.zeros(128, int); self.active = np.zeros(128, bool)
         self.x_nmf = np.full(128, 1e-3)
@@ -2215,7 +2220,15 @@ class PianoView(View):
         v = self.notes(A)
         self.level = np.maximum(v, self.level * 0.6)
         k = int(np.argmax(v)); self.top = k if v[k] > 0.5 and self.lo <= k <= self.hi else None
-        self.roll[1:] = self.roll[:-1]; self.roll[0] = v               # 0. satir = simdi (altta)
+        # zaman tabanli kayma: FPS'ten bagimsiz, saniyede ROWS / sure satir
+        rps = self.ROWS / self.SPEEDS[self.c_speed.currentIndex()]
+        self.acc += self.clk.restart() / 1000 * rps
+        n = min(int(self.acc), self.ROWS)
+        if n > 0:
+            self.acc -= n
+            self.roll[n:] = self.roll[:-n].copy(); self.roll[:n] = v      # 0. satir = simdi (altta)
+        else:
+            self.roll[0] = np.maximum(self.roll[0], v)                  # ayni satira birlestir
         idx = (np.clip(self.roll[::-1], 0, 1) * 255).astype(np.uint8)  # ust = eski
         rgba = self.lut[idx]
         self.img = QtGui.QImage(rgba.tobytes(), 128, self.ROWS, 128 * 4, QtGui.QImage.Format_RGBA8888).copy()
