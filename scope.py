@@ -566,7 +566,7 @@ class Analyzer:
         else:
             self.bass_flash *= 0.82
         self.ready = True
-        return dict(kick=kick, bass_flash=self.bass_flash,L=L, R=R, f_big=self.f_big, db_big=db_big, smooth=self.smooth_db,
+        return dict(kick=kick, bass_flash=self.bass_flash, semi_lin=e, L=L, R=R, f_big=self.f_big, db_big=db_big, smooth=self.smooth_db,
                     mf=mf, f_fast=self.f_fast, fast_n=self.FAST,
                     semi=self.semi, onset=self.semi - self.semi_prev,
                     chroma=self.chroma, peaks=peaks)
@@ -2111,31 +2111,108 @@ class _PianoWidget(QtWidgets.QWidget):
             p.fillRect(QtCore.QRectF(0, top, x_end, kh), QtGui.QColor(0, 0, 0, 120))
         p.end()
 
+def _harmonic_templates():
+    """NMF icin sabit sozluk: her nota (sutun) = harmonik dizisi (8 harmonik, 1/h^0.8),
+    yari-ton kutularina kesirli dagitilmis. Satir = gozlenen yari ton (0..127)."""
+    T = np.zeros((128, 128), dtype=np.float64)
+    for n in range(128):
+        for h in range(1, 9):
+            pos = n + 12 * np.log2(h); lo_ = int(np.floor(pos)); fr = pos - lo_
+            w = 1.0 / h ** 0.8
+            if lo_ < 128: T[lo_, n] += w * (1 - fr)
+            if lo_ + 1 < 128: T[lo_ + 1, n] += w * fr
+    return T / np.linalg.norm(T, axis=0, keepdims=True)
+_HT = _harmonic_templates()
+
 class PianoView(View):
-    """Piyano: calan notalar tuslarda yanar (gucune gore), ustte zamanla yukari akan
-    piyano rulosu. Aralik panel basligindan secilir."""
+    """Piyano: calan notalar tuslarda yanar (gucune gore), ustte zamanla yukari akan piyano rulosu.
+    Baslikta: tus araligi + algilama modu
+      Ham    : yari-ton tepeleri (harmonikler de yanar)
+      Filtre : harmonik bastirma + en fazla N nota + acilma/kapanma gecikmesi
+      NMF    : spektrumu notalarin harmonik sablonlarinin toplami olarak cozer (seyrek, negatif olmayan)"""
     name = "Piyano"
     RANGES = [("61 tus C2-C7", 36, 96), ("49 tus C3-C7", 48, 96), ("37 tus C3-C6", 48, 84),
               ("88 tus A0-C8", 21, 108)]
+    MODES = ["NMF", "Filtre", "Ham"]          # NMF varsayilan: testte en dogru
     ROWS = 220
+    MAXN = 6                      # ayni anda en fazla tus
+    HARM = (12, 19, 24, 28, 31)   # 2., 3., 4., 5., 6. harmoniklerin yari-ton mesafesi
     def __init__(self):
         self.widget = _PianoWidget(self)
         self.lo, self.hi = self.RANGES[0][1:]
-        self.extra = QtWidgets.QComboBox(); self.extra.addItems([r[0] for r in self.RANGES])
-        self.extra.currentIndexChanged.connect(lambda i: self.set_range(*self.RANGES[i][1:]))
+        box = QtWidgets.QWidget(); bl = QtWidgets.QHBoxLayout(box); bl.setContentsMargins(0, 0, 0, 0)
+        self.c_rng = QtWidgets.QComboBox(); self.c_rng.addItems([r[0] for r in self.RANGES])
+        self.c_rng.currentIndexChanged.connect(lambda i: self.set_range(*self.RANGES[i][1:]))
+        self.c_mode = QtWidgets.QComboBox(); self.c_mode.addItems(self.MODES)
+        self.c_mode.setToolTip("Ham: tum tepeler | Filtre: harmonikleri ele | NMF: harmonik sablon cozumu")
+        bl.addWidget(self.c_rng); bl.addWidget(self.c_mode)
+        self.extra = box
         self.level = np.zeros(128); self.top = None
+        self.on_cnt = np.zeros(128, int); self.off_cnt = np.zeros(128, int); self.active = np.zeros(128, bool)
+        self.x_nmf = np.full(128, 1e-3)
         self.roll = np.zeros((self.ROWS, 128), dtype=np.float32)
         self.lut = np.zeros((256, 4), dtype=np.uint8); self.lut[:, :3] = LUT[:, :3]; self.lut[:, 3] = 255
         self.lut[0] = (*rgb(PANEL), 255)
         self.img = None; self.min_valid = 0
     def set_range(self, lo, hi):
         self.lo, self.hi = lo, hi; self.widget.update()
-    def update(self, A):
-        semi = A["semi"]
-        # sadece gercek tepeler: komsu yari tonlardan guclu VE %55 ustu (yayilma/harmonik bulasmasi elenir)
+    # ---------- algilama modlari ----------
+    @staticmethod
+    def raw(semi):
         pad = np.pad(semi, 1)
         peak = (semi >= pad[:-2]) & (semi >= pad[2:]) & (semi > 0.55)
-        v = np.where(peak, np.clip((semi - 0.55) / 0.45, 0, 1) ** 0.8 * 0.85 + 0.15, 0.0)
+        return np.where(peak, np.clip((semi - 0.55) / 0.45, 0, 1) ** 0.8 * 0.85 + 0.15, 0.0)
+    def harm_filter(self, v):
+        """Bir notanin harmonik mesafesinde ASAGIDA yeterince guclu bir nota varsa, ust nota harmoniktir."""
+        out = v.copy()
+        for m in np.argsort(v)[::-1]:                    # gucluden zayifa
+            if out[m] <= 0:
+                continue
+            for d in self.HARM:
+                b_ = m - d
+                if b_ >= 0 and out[b_] > 0 and out[b_] >= 0.5 * out[m]:
+                    out[m] = 0; break
+        return out
+    def nmf(self, e):
+        """Sabit harmonik sozlukle seyrek NNLS (carpimsal guncelleme, 25 tur, onceki sonuctan sicak baslangic)."""
+        y = np.sqrt(np.maximum(e, 0)); y[:self.lo] = 0; y[self.hi + 25:] = 0
+        if y.max() <= 1e-9:
+            self.x_nmf[:] = 1e-3; return np.zeros(128)
+        y = y / y.max()
+        T = _HT; x = np.maximum(self.x_nmf, 1e-3)
+        lam = 0.02                                       # seyreklik: az nota tercih
+        TTy = T.T @ y; TTT = T.T @ T
+        for _ in range(25):
+            x *= TTy / (TTT @ x + lam + 1e-9)
+        x[:self.lo] = 0; x[self.hi + 1:] = 0
+        self.x_nmf = x
+        mx = x.max()
+        if mx <= 1e-6:
+            return np.zeros(128)
+        r = x / mx
+        return np.where(r > 0.3, np.clip((r - 0.3) / 0.7, 0, 1) ** 0.7 * 0.85 + 0.15, 0.0)
+    def stabilize(self, v):
+        """En fazla MAXN nota + acilma (2 kare) / kapanma (3 kare) gecikmesi -> titreme yok."""
+        cand = np.zeros(128, bool)
+        idx = np.argsort(v)[::-1][:self.MAXN]
+        cand[idx[v[idx] > 0]] = True
+        self.on_cnt = np.where(cand, self.on_cnt + 1, 0)
+        self.off_cnt = np.where(cand, 0, self.off_cnt + 1)
+        self.active = (self.active & (self.off_cnt < 3)) | (self.on_cnt >= 2)
+        self.held = getattr(self, "held", np.zeros(128))
+        self.held = np.where(cand, v, self.held * 0.85)
+        return np.where(self.active, np.maximum(self.held, 0.15), 0.0)
+    def notes(self, A):
+        mode = self.c_mode.currentText()
+        semi = A["semi"]
+        if mode == "Ham":
+            return self.raw(semi)
+        if mode == "Filtre":
+            return self.stabilize(self.harm_filter(self.raw(semi)))
+        return self.stabilize(self.nmf(A["semi_lin"]))
+    def update(self, A):
+        semi = A["semi"]
+        v = self.notes(A)
         self.level = np.maximum(v, self.level * 0.6)
         k = int(np.argmax(v)); self.top = k if v[k] > 0.5 and self.lo <= k <= self.hi else None
         self.roll[1:] = self.roll[:-1]; self.roll[0] = v               # 0. satir = simdi (altta)
