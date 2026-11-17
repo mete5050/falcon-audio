@@ -2134,6 +2134,9 @@ class PianoView(View):
     RANGES = [("61 tus C2-C7", 36, 96), ("49 tus C3-C7", 48, 96), ("37 tus C3-C6", 48, 84),
               ("88 tus A0-C8", 21, 108)]
     MODES = ["NMF", "Filtre", "Ham"]          # NMF varsayilan: testte en dogru
+    # tetik esigi: (Ham/Filtre yari-ton esigi, NMF goreli esik)
+    THRS = [("Esik: cok hassas", 0.40, 0.12), ("Esik: hassas", 0.48, 0.20), ("Esik: normal", 0.55, 0.30),
+            ("Esik: secici", 0.65, 0.42), ("Esik: cok secici", 0.75, 0.55)]
     SPEEDS = [8, 5, 3, 2, 1]                   # rulonun gosterdigi sure (sn); varsayilan 3
     ROWS = 220
     MAXN = 6                      # ayni anda en fazla tus
@@ -2150,6 +2153,9 @@ class PianoView(View):
         self.c_speed.addItems([f"{s} sn" for s in self.SPEEDS]); self.c_speed.setCurrentIndex(2)
         self.c_speed.setToolTip("Rulonun gosterdigi sure: kisa = notalar daha hizli akar")
         bl.addWidget(self.c_rng); bl.addWidget(self.c_mode); bl.addWidget(self.c_speed)
+        self.c_thr = QtWidgets.QComboBox(); self.c_thr.addItems([r[0] for r in self.THRS]); self.c_thr.setCurrentIndex(2)
+        self.c_thr.setToolTip("Tetik genligi: hassas = zayif notalar da yanar, secici = sadece guclu notalar")
+        bl.addWidget(self.c_thr)
         self.extra = box
         self.acc = 0.0; self.clk = QtCore.QElapsedTimer(); self.clk.start()
         self.level = np.zeros(128); self.top = None
@@ -2162,11 +2168,13 @@ class PianoView(View):
     def set_range(self, lo, hi):
         self.lo, self.hi = lo, hi; self.widget.update()
     # ---------- algilama modlari ----------
-    @staticmethod
-    def raw(semi):
+    def thr(self):
+        return self.THRS[self.c_thr.currentIndex()][1:] if hasattr(self, "c_thr") else (0.55, 0.30)
+    def raw(self, semi):
+        th = self.thr()[0]
         pad = np.pad(semi, 1)
-        peak = (semi >= pad[:-2]) & (semi >= pad[2:]) & (semi > 0.55)
-        return np.where(peak, np.clip((semi - 0.55) / 0.45, 0, 1) ** 0.8 * 0.85 + 0.15, 0.0)
+        peak = (semi >= pad[:-2]) & (semi >= pad[2:]) & (semi > th)
+        return np.where(peak, np.clip((semi - th) / (1 - th), 0, 1) ** 0.8 * 0.85 + 0.15, 0.0)
     def harm_filter(self, v):
         """Bir notanin harmonik mesafesinde ASAGIDA yeterince guclu bir nota varsa, ust nota harmoniktir."""
         out = v.copy()
@@ -2195,7 +2203,8 @@ class PianoView(View):
         if mx <= 1e-6:
             return np.zeros(128)
         r = x / mx
-        return np.where(r > 0.3, np.clip((r - 0.3) / 0.7, 0, 1) ** 0.7 * 0.85 + 0.15, 0.0)
+        th = self.thr()[1]
+        return np.where(r > th, np.clip((r - th) / (1 - th), 0, 1) ** 0.7 * 0.85 + 0.15, 0.0)
     def stabilize(self, v):
         """En fazla MAXN nota + acilma (2 kare) / kapanma (3 kare) gecikmesi -> titreme yok."""
         cand = np.zeros(128, bool)
