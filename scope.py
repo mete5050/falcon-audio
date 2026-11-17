@@ -9,6 +9,10 @@ Gorunumler: Osiloskop, Spektrum, Kromagram, Nota x Oktav, Waterfall,
 import threading
 import numpy as np
 import pyaudiowpatch as pyaudio
+try:                      # PyQt'den ONCE yuklenmeli (Windows DLL cakismasi); Piyano "Model" modu icin
+    import onnxruntime as _ort
+except Exception:
+    _ort = None
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
@@ -2124,6 +2128,63 @@ def _harmonic_templates():
     return T / np.linalg.norm(T, axis=0, keepdims=True)
 _HT = _harmonic_templates()
 
+class ModelTranscriber:
+    """Spotify basic-pitch modeli (ONNX) ile canli nota cozumu. Arka planda ~12 kez/sn
+    son 2 sn sesi modele verir; sondan MARGIN kare geriden okur (model baglam ister)."""
+    SR, N, FPS, MARGIN = 22050, 43844, 86, 6
+    _shared = None
+    @classmethod
+    def get(cls):
+        if cls._shared is None:
+            cls._shared = cls()
+        return cls._shared
+    def __init__(self):
+        self.err = None; self.note = np.zeros(128); self.onset = np.zeros(128, bool); self.lk = threading.Lock()
+        try:
+            import importlib.util, os as _os
+            ort = _ort
+            if ort is None:
+                raise RuntimeError("onnxruntime yuklenemedi")
+            spec = importlib.util.find_spec("basic_pitch")
+            if spec is None:
+                raise RuntimeError("basic-pitch kurulu degil (pip install basic-pitch)")
+            path = _os.path.join(_os.path.dirname(spec.origin), "saved_models", "icassp_2022", "nmp.onnx")
+            so = ort.SessionOptions(); so.intra_op_num_threads = 2
+            self.sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
+            self.inp = self.sess.get_inputs()[0].name
+        except Exception as ex:
+            self.err = str(ex); return
+        self.last_on = 0.0
+        threading.Thread(target=self.loop, daemon=True).start()
+    def step(self, x22):
+        """x22: 22050 Hz mono, N ornek -> (nota aktivasyonu[128], onset aktivasyonu[128]) sondan MARGIN kare once."""
+        out = self.sess.run(["StatefulPartitionedCall:1", "StatefulPartitionedCall:2"],
+                            {self.inp: x22.reshape(1, -1, 1).astype(np.float32)})
+        note = np.zeros(128); ons = np.zeros(128)
+        k = -1 - self.MARGIN
+        note[21:109] = out[0][0, k]
+        ons[21:109] = out[1][0, k - 4:k + 1].max(0)                     # son ~50 ms'deki vuruslar
+        return note, ons
+    def loop(self):
+        import time
+        while True:
+            time.sleep(0.08)
+            try:
+                rate = RATE; n_src = int(np.ceil(self.N * rate / self.SR)) + 1
+                x = read_abs(total - n_src, n_src)
+                if x is None:
+                    continue
+                x22 = np.interp(np.arange(self.N) * (rate / self.SR), np.arange(n_src), x)
+                note, ons = self.step(x22)
+                with self.lk:
+                    self.note = note; self.onset = self.onset | (ons > 0.5)
+            except Exception as ex:
+                self.err = str(ex)
+    def take(self):
+        with self.lk:
+            o = self.onset; self.onset = np.zeros(128, bool)
+            return self.note.copy(), o
+
 class PianoView(View):
     """Piyano: calan notalar tuslarda yanar (gucune gore), ustte zamanla yukari akan piyano rulosu.
     Baslikta: tus araligi + algilama modu
@@ -2133,10 +2194,11 @@ class PianoView(View):
     name = "Piyano"
     RANGES = [("61 tus C2-C7", 36, 96), ("49 tus C3-C7", 48, 96), ("37 tus C3-C6", 48, 84),
               ("88 tus A0-C8", 21, 108)]
-    MODES = ["NMF", "Filtre", "Ham"]          # NMF varsayilan: testte en dogru
+    MODES = ["NMF", "Model", "Filtre", "Ham"]          # NMF varsayilan: testte en dogru
     # tetik esigi: (Ham/Filtre yari-ton esigi, NMF goreli esik)
-    THRS = [("Esik: cok hassas", 0.40, 0.12), ("Esik: hassas", 0.48, 0.20), ("Esik: normal", 0.55, 0.30),
-            ("Esik: secici", 0.65, 0.42), ("Esik: cok secici", 0.75, 0.55)]
+    # (Ham/Filtre yari-ton esigi, NMF goreli esik, Model nota olasiligi)
+    THRS = [("Esik: cok hassas", 0.40, 0.12, 0.18), ("Esik: hassas", 0.48, 0.20, 0.24), ("Esik: normal", 0.55, 0.30, 0.30),
+            ("Esik: secici", 0.65, 0.42, 0.40), ("Esik: cok secici", 0.75, 0.55, 0.50)]
     SPEEDS = [8, 5, 3, 2, 1]                   # rulonun gosterdigi sure (sn); varsayilan 3
     ROWS = 220
     MAXN = 6                      # ayni anda en fazla tus
@@ -2169,7 +2231,7 @@ class PianoView(View):
         self.lo, self.hi = lo, hi; self.widget.update()
     # ---------- algilama modlari ----------
     def thr(self):
-        return self.THRS[self.c_thr.currentIndex()][1:] if hasattr(self, "c_thr") else (0.55, 0.30)
+        return self.THRS[self.c_thr.currentIndex()][1:] if hasattr(self, "c_thr") else (0.55, 0.30, 0.30)
     def raw(self, semi):
         th = self.thr()[0]
         pad = np.pad(semi, 1)
@@ -2223,6 +2285,15 @@ class PianoView(View):
             return self.raw(semi)
         if mode == "Filtre":
             return self.stabilize(self.harm_filter(self.raw(semi)))
+        if mode == "Model":
+            mt = ModelTranscriber.get()
+            if mt.err:
+                return np.zeros(128)
+            note, self.m_ons = mt.take()
+            th = self.thr()[2]
+            v = np.where(note > th, np.clip((note - th) / (1 - th), 0, 1) ** 0.6 * 0.85 + 0.15, 0.0)
+            v[:self.lo] = 0; v[self.hi + 1:] = 0
+            return v
         return self.stabilize(self.nmf(A["semi_lin"]))
     def onset_scan(self):
         """Son guncellemeden beri gelen sesi 10 ms adimlarla tara; her nota icin enerji
@@ -2258,7 +2329,10 @@ class PianoView(View):
         v = self.notes(A)
         # --- yeniden basis: kisa pencereli (~40 ms) nota enerjisi, 10 ms adim, FPS'ten bagimsiz
         # nota "aktif" olmadan (2 kare) once gelen vuruslari ~80 ms beklet
-        self.pend = np.where(self.onset_scan(), 4, np.maximum(getattr(self, "pend", np.zeros(128)) - 1, 0))
+        src_ons = self.onset_scan()
+        if self.c_mode.currentText() == "Model":
+            src_ons = getattr(self, "m_ons", np.zeros(128, bool))
+        self.pend = np.where(src_ons, 4, np.maximum(getattr(self, "pend", np.zeros(128)) - 1, 0))
         ons = (self.pend > 0) & (v > 0); self.pend[ons] = 0
         self.onsets += int(ons.sum())
         self.level = np.maximum(v, self.level * 0.45)
