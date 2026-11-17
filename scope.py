@@ -2033,8 +2033,121 @@ class WindowCaptureView(View):
         elif msg and self.widget.text() != msg:
             self.widget.setPixmap(QtGui.QPixmap()); self.widget.setText(msg)
 
+
+class _PianoWidget(QtWidgets.QWidget):
+    """Piyano klavyesi + ustunde yukari akan piyano rulosu (QPainter)."""
+    BLACK = {1, 3, 6, 8, 10}
+    def __init__(self, view):
+        super().__init__(); self.v = view
+        self.setMinimumSize(300, 120)
+    def layout_keys(self, lo, hi, W):
+        """Her midi notasi icin (x, genislik, siyah_mi). Beyaz tuslar esit, siyahlar dar ve ustte."""
+        whites = [m for m in range(lo, hi + 1) if m % 12 not in self.BLACK]
+        ww = W / max(1, len(whites)); pos = {}; i = 0
+        for m in range(lo, hi + 1):
+            if m % 12 in self.BLACK:
+                pos[m] = (i * ww - ww * 0.31, ww * 0.62, True)
+            else:
+                pos[m] = (i * ww, ww, False); i += 1
+        return pos
+    def paintEvent(self, ev):
+        v = self.v; lo, hi = v.lo, v.hi
+        p = QtGui.QPainter(self)
+        W, H = self.width(), self.height()
+        kh = max(40, min(H * 0.32, 140))                    # klavye yuksekligi
+        rh = H - kh - 3                                      # rulo yuksekligi
+        p.fillRect(self.rect(), QtGui.QColor(PANEL))
+        pos = self.layout_keys(lo, hi, W)
+        # --- piyano rulosu: her tus kendi kolonunu ciziyor (1 px'lik kaynak -> tus genisligi)
+        if v.img is not None and rh > 10:
+            p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, False)
+            for m in range(lo, hi + 1):
+                x, w, blk = pos[m]
+                p.drawImage(QtCore.QRectF(x + (0.5 if not blk else 0), 0, w - (1 if not blk else 0), rh),
+                            v.img, QtCore.QRectF(m, 0, 1, v.img.height()))
+            # beyaz tus ayrim cizgileri + C cizgileri
+            pen_c = QtGui.QPen(QtGui.QColor(LINE)); p.setPen(pen_c)
+            for m in range(lo, hi + 1):
+                if m % 12 == 0:
+                    x = pos[m][0]; p.drawLine(QtCore.QPointF(x, 0), QtCore.QPointF(x, rh))
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        top = H - kh
+        lvl = v.level
+        # --- beyaz tuslar
+        f = QtGui.QFont(FONT, max(6, int(pos[lo][1] * 0.32 if not pos[lo][2] else 8))); p.setFont(f)
+        for m in range(lo, hi + 1):
+            x, w, blk = pos[m]
+            if blk:
+                continue
+            a = float(lvl[m])
+            base = (246, 244, 238)
+            c = QtGui.QColor(*mix("#f6f4ee", RED_BRIGHT, min(1.0, a * 1.1))) if a > 0.05 else QtGui.QColor(*base)
+            g = QtGui.QLinearGradient(0, top, 0, H); g.setColorAt(0, c.darker(108)); g.setColorAt(0.85, c); g.setColorAt(1, c.darker(125))
+            p.setPen(QtGui.QPen(QtGui.QColor("#2a2a2e"), 1)); p.setBrush(QtGui.QBrush(g))
+            p.drawRoundedRect(QtCore.QRectF(x + 0.5, top, w - 1, kh - 1), 3, 3)
+            if m % 12 == 0 and w > 9:
+                p.setPen(QtGui.QColor("#8a8a90"))
+                p.drawText(QtCore.QRectF(x, H - 18, w, 16), QtCore.Qt.AlignCenter, f"C{m // 12 - 1}")
+        # --- siyah tuslar (ustte)
+        for m in range(lo, hi + 1):
+            x, w, blk = pos[m]
+            if not blk:
+                continue
+            a = float(lvl[m])
+            c = QtGui.QColor(*mix("#18181c", RED, min(1.0, a * 1.2))) if a > 0.05 else QtGui.QColor("#18181c")
+            g = QtGui.QLinearGradient(0, top, 0, top + kh * 0.62); g.setColorAt(0, c.lighter(115)); g.setColorAt(1, c)
+            p.setPen(QtGui.QPen(QtGui.QColor("#000"), 1)); p.setBrush(QtGui.QBrush(g))
+            p.drawRoundedRect(QtCore.QRectF(x, top - 1, w, kh * 0.62), 2, 2)
+        # --- en guclu nota: tusun ustunde isim
+        if v.top is not None:
+            x, w, blk = pos[v.top]
+            f2 = QtGui.QFont(FONT, 12, QtGui.QFont.Bold); p.setFont(f2)
+            p.setPen(QtGui.QColor(FG))
+            p.drawText(QtCore.QRectF(x - 40 + w / 2, top - 24, 80, 20), QtCore.Qt.AlignCenter,
+                       f"{NOTES[v.top % 12]}{v.top // 12 - 1}")
+        # gecersiz (FFT cozunurlugu yetmeyen) bas bolgesi
+        if v.min_valid > lo:
+            x_end = pos[v.min_valid][0]
+            p.fillRect(QtCore.QRectF(0, top, x_end, kh), QtGui.QColor(0, 0, 0, 120))
+        p.end()
+
+class PianoView(View):
+    """Piyano: calan notalar tuslarda yanar (gucune gore), ustte zamanla yukari akan
+    piyano rulosu. Aralik panel basligindan secilir."""
+    name = "Piyano"
+    RANGES = [("61 tus C2-C7", 36, 96), ("49 tus C3-C7", 48, 96), ("37 tus C3-C6", 48, 84),
+              ("88 tus A0-C8", 21, 108)]
+    ROWS = 220
+    def __init__(self):
+        self.widget = _PianoWidget(self)
+        self.lo, self.hi = self.RANGES[0][1:]
+        self.extra = QtWidgets.QComboBox(); self.extra.addItems([r[0] for r in self.RANGES])
+        self.extra.currentIndexChanged.connect(lambda i: self.set_range(*self.RANGES[i][1:]))
+        self.level = np.zeros(128); self.top = None
+        self.roll = np.zeros((self.ROWS, 128), dtype=np.float32)
+        self.lut = np.zeros((256, 4), dtype=np.uint8); self.lut[:, :3] = LUT[:, :3]; self.lut[:, 3] = 255
+        self.lut[0] = (*rgb(PANEL), 255)
+        self.img = None; self.min_valid = 0
+    def set_range(self, lo, hi):
+        self.lo, self.hi = lo, hi; self.widget.update()
+    def update(self, A):
+        semi = A["semi"]
+        # sadece gercek tepeler: komsu yari tonlardan guclu VE %55 ustu (yayilma/harmonik bulasmasi elenir)
+        pad = np.pad(semi, 1)
+        peak = (semi >= pad[:-2]) & (semi >= pad[2:]) & (semi > 0.55)
+        v = np.where(peak, np.clip((semi - 0.55) / 0.45, 0, 1) ** 0.8 * 0.85 + 0.15, 0.0)
+        self.level = np.maximum(v, self.level * 0.6)
+        k = int(np.argmax(v)); self.top = k if v[k] > 0.5 and self.lo <= k <= self.hi else None
+        self.roll[1:] = self.roll[:-1]; self.roll[0] = v               # 0. satir = simdi (altta)
+        idx = (np.clip(self.roll[::-1], 0, 1) * 255).astype(np.uint8)  # ust = eski
+        rgba = self.lut[idx]
+        self.img = QtGui.QImage(rgba.tobytes(), 128, self.ROWS, 128 * 4, QtGui.QImage.Format_RGBA8888).copy()
+        valid = np.nonzero(semi > 0)[0]
+        self.min_valid = int(valid.min()) if len(valid) else self.lo
+        self.widget.update()
+
 VIEWS = [ScopeView, SpectrumView, ChromaView, NoteOctaveView, WaterfallView,
-         SpiralView, OctaveEnergyView, RhythmView, WideChromaView, MelodyView, DrumGridView, VUMeterView, AnalogVUView, CRTScopeView, LEDSpectrumView, DrumTrailView, SpotifyView, MediaView, WindowCaptureView]
+         SpiralView, OctaveEnergyView, RhythmView, WideChromaView, MelodyView, DrumGridView, VUMeterView, AnalogVUView, CRTScopeView, LEDSpectrumView, DrumTrailView, SpotifyView, MediaView, WindowCaptureView, PianoView]
 
 # ---------------- PANEL + ARAYUZ ----------------
 class Panel(QtWidgets.QFrame):
