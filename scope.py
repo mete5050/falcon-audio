@@ -6,6 +6,7 @@ Bilgisayarda calan sesi (Spotify vb.) WASAPI loopback ile yakalar.
 Gorunumler: Osiloskop, Spektrum, Kromagram, Nota x Oktav, Waterfall,
             Oktav Sarmali (animasyon), Oktav Enerjisi
 """
+import os
 import threading
 import numpy as np
 import pyaudiowpatch as pyaudio
@@ -2577,6 +2578,68 @@ class Main(QtWidgets.QMainWindow):
         self.t = QtCore.QTimer(); self.t.setTimerType(QtCore.Qt.PreciseTimer)
         self.t.timeout.connect(self.tick); self.t.start(14)
         self.clock = QtCore.QElapsedTimer(); self.clock.start(); self.frames = 0
+        self.autosave = QtCore.QTimer(); self.autosave.timeout.connect(self.save_state)
+        if not os.environ.get("SCOPE_AUTOTEST"):
+            self.autosave.start(10000)                      # ani kapanis/elektrik kesintisine karsi
+
+    # ---------- oturum kaydi: kapaninca (ve 10 sn'de bir) kaydet, acilista geri yukle ----------
+    @staticmethod
+    def _combos(view):
+        ex = view.extra
+        if ex is None:
+            return []
+        return [ex] if isinstance(ex, QtWidgets.QComboBox) else ex.findChildren(QtWidgets.QComboBox)
+    def save_state(self):
+        import json, base64
+        b64 = lambda ba: base64.b64encode(bytes(ba)).decode()
+        st = dict(
+            geom=b64(self.saveGeometry()), theme=self.c_theme.currentText(),
+            big=self.c_big.currentIndex(), fast=self.c_fast.currentIndex(), decay=self.c_decay.currentIndex(),
+            wf=self.s_wf.value(), flash=self.b_flash.isChecked(), flash_pct=self.s_flash.value(),
+            kbd=self.c_kbd.currentIndex(), device=CUR_DEV,
+            vs=b64(self.vs.saveState()), rows=[b64(r.saveState()) for r in self.rows],
+            panels=[dict(view=pn.combo.currentText(), hidden=pn.isHidden(),
+                         extra=[c.currentIndex() for c in self._combos(pn.view)]) for pn in self.panels])
+        try:
+            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf8") as f:
+                json.dump(st, f); f.flush(); os.fsync(f.fileno())
+            os.replace(tmp, STATE_FILE)                     # atomik: elektrik gitse de yarim dosya kalmaz
+        except Exception as e:
+            print("durum kaydedilemedi:", e)
+    def load_state(self, st):
+        import base64
+        ba = lambda s: QtCore.QByteArray(base64.b64decode(s))
+        def safe(f):
+            try:
+                f()
+            except Exception as e:
+                print("durum geri yuklenemedi:", e)
+        safe(lambda: self.restoreGeometry(ba(st["geom"])))
+        safe(lambda: self.c_theme.setCurrentText(st["theme"]))
+        for w, k in ((self.c_big, "big"), (self.c_fast, "fast"), (self.c_decay, "decay"), (self.c_kbd, "kbd")):
+            safe(lambda w=w, k=k: w.setCurrentIndex(st[k]))
+        safe(lambda: self.s_wf.setValue(st["wf"]))
+        safe(lambda: self.b_flash.setChecked(st["flash"]))
+        safe(lambda: self.s_flash.setValue(st["flash_pct"]))
+        for pn, ps in zip(self.panels, st.get("panels", [])):
+            def one(pn=pn, ps=ps):
+                if pn.combo.currentText() != ps["view"]:
+                    pn.combo.setCurrentText(ps["view"])
+                for c, i in zip(self._combos(pn.view), ps.get("extra", [])):
+                    if 0 <= i < c.count():
+                        c.setCurrentIndex(i)
+                pn.setHidden(ps.get("hidden", False))
+            safe(one)
+        def splitters():
+            safe(lambda: self.vs.restoreState(ba(st["vs"])))
+            for r, s in zip(self.rows, st.get("rows", [])):
+                safe(lambda r=r, s=s: r.restoreState(ba(s)))
+        QtCore.QTimer.singleShot(60, splitters)             # reset_layout'tan (singleShot 0) SONRA
+    def closeEvent(self, ev):
+        self.save_state()
+        super().closeEvent(ev)
 
     def set_theme(self, name):
         apply_theme(name)
@@ -2658,7 +2721,8 @@ class Main(QtWidgets.QMainWindow):
         dev = choose_device(self)
         if dev is None:
             return
-        open_stream(dev)
+        global CUR_DEV
+        open_stream(dev); CUR_DEV = dev["name"]
         self.dev_lbl.setText(dev["name"].replace(" [Loopback]", "")[:40])
         self.reconf()
         for pn in self.panels:          # RATE degismis olabilir -> gorunumleri yenile
@@ -2691,6 +2755,17 @@ class Main(QtWidgets.QMainWindow):
             self.fps.setText(f"{self.frames} FPS · nota gecikmesi ~{lat:.0f} ms")
             self.frames = 0; self.clock.restart()
 
+STATE_FILE = os.path.join(os.path.expanduser("~"), ".falcon_audio", "state.json")
+CUR_DEV = None
+
+def read_state():
+    import json
+    try:
+        with open(STATE_FILE, encoding="utf8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
 def choose_device(parent=None):
     devs = list_devices()
     dlg = QtWidgets.QDialog(parent); dlg.setWindowTitle("FALCON // Ses kaynagi sec")
@@ -2722,14 +2797,23 @@ app.setStyleSheet(QSS)
 _ico = __import__("os").path.join(__import__("os").path.expanduser("~"), ".falcon_audio", "icon.ico")
 if __import__("os").path.exists(_ico):
     app.setWindowIcon(QtGui.QIcon(_ico))
-import os
 AUTOTEST = os.environ.get("SCOPE_AUTOTEST")          # test: dialogsuz baslat, 5 sn sonra kapan
-first = list_devices()[0][1] if AUTOTEST else choose_device()
+STATE = None if AUTOTEST else read_state()
+first = None
+if AUTOTEST:
+    first = list_devices()[0][1]
+elif STATE and STATE.get("device"):                 # son cihaz hala varsa sormadan baslat
+    first = next((d for _, d in list_devices() if d["name"] == STATE["device"]), None)
+if first is None:
+    first = choose_device()
 if AUTOTEST:
     QtCore.QTimer.singleShot(5000, app.quit)
 if first is None:
     raise SystemExit
-open_stream(first)
-m = Main(); m.dev_lbl.setText(first["name"].replace(" [Loopback]", "")[:40]); m.show()
+open_stream(first); CUR_DEV = first["name"]
+m = Main(); m.dev_lbl.setText(first["name"].replace(" [Loopback]", "")[:40])
+if STATE:
+    m.load_state(STATE)
+m.show()
 app.exec_()
 stream.stop_stream(); stream.close(); p.terminate()
