@@ -1,89 +1,92 @@
 # FALCON//AUDIO
 
-Bilgisayarda çalan sesi (Spotify, YouTube, oyun… ne çalarsa) ya da mikrofonu **gerçek zamanlı** görselleştiren masaüstü uygulaması. Tek Python dosyası, Windows.
+**English** | [Türkçe](README.tr.md)
 
-![Falcon teması](screenshots/falcon.png)
+A desktop app that visualizes whatever your computer is playing (Spotify, YouTube, games…) or your microphone, **in real time**. A single Python file, Windows only.
 
-## Özellikler
+![Falcon theme](screenshots/falcon.png)
 
-**20 görünüm.** Ekranda 6 panel var. Her panelin üstündeki menüden görünüm seçilir. Paneller sürüklenerek boyutlandırılır, ✕ ile kapatılır.
+## Features
 
-| Görünüm | Ne gösterir |
+**20 views.** The window has 6 panels. Pick a view from the menu at the top of each panel. Drag the borders to resize panels, and close them with ✕.
+
+| View | What it shows |
 |---|---|
-| Osiloskop / CRT Osiloskop | Tetiklemeli dalga şekli. CRT sürümünde yeşil fosfor ve önceki taramaların sönerek kalan izi |
-| Spektrum | 20 Hz – 20 kHz, tepe notaları cent hassasiyetiyle işaretli |
-| LED Spektrum (31 bant) | Eski hi-fi grafik analizörü: 1/3 oktav, tepe tutmalı LED'ler |
-| Waterfall | Zaman-frekans haritası |
-| Kromagram / Geniş Kromagram | 12 notanın ağırlığı ve akor tahmini (majör, minör, 7, m7). Geniş sürüm 7 oktavı yan yana gösterir |
-| Nota × Oktav | C1–B7 ısı haritası, tepe notalar beyaz |
-| Melodi İzi | Saniyede 100 ölçümle baskın perde. Vibrato hızı ve derinliğini gösterir, oktav aralığı panel başına seçilir |
-| Oktav Sarmalı / Oktav Enerjisi | Notaların oktav sarmalı üzerinde animasyonu |
-| Ritim / Davul Izgarası / Davul İzi | Kick, snare ve hi-hat algılama, BPM, 16 adımlık davul kalıbı ve zaman çizelgesi |
-| VU Metre / Analog VU | LED ya da ibreli VU. Referans seviyesi seçilebilir ya da otomatik |
-| **Piyano** | Çalan notalar klavyede yanar, üstte piyano rulosu akar. 4 algılama modu (aşağıda), tuş aralığı (37–88 tuş), rulo hızı (1–8 sn) ve tetik eşiği seçilir. Aynı tuşa hızlı tekrar basışlar ayrı ayrı görünür |
-| Spotify | Çalan şarkı, kapak, ilerleme ve oynat/durdur/ileri/geri. Kendi Spotify Developer uygulamanın Client ID'si gerekir (aşağıda) |
-| Medya | Windows'ta medya çalan her uygulamanın (tarayıcı, YouTube Music, VLC…) şarkı bilgisi ve kontrolleri |
-| Pencere Yakalama | Seçilen bir uygulama penceresinin canlı görüntüsü (örn. Spotify'daki video) |
+| Oscilloscope / CRT Oscilloscope | Triggered waveform. The CRT version has green phosphor with fading traces of earlier sweeps |
+| Spectrum | 20 Hz – 20 kHz, with peak notes labeled to the cent |
+| LED Spectrum (31 bands) | Classic hi-fi graphic analyzer: 1/3 octave bands with peak-hold LEDs |
+| Waterfall | Time-frequency map |
+| Chromagram / Wide Chromagram | Weight of the 12 notes plus a chord guess (major, minor, 7, m7). The wide version shows 7 octaves side by side |
+| Note × Octave | C1–B7 heat map, strongest notes in white |
+| Melody Trail | Dominant pitch measured 100 times a second. Shows vibrato rate and depth. Octave range is set per panel |
+| Octave Spiral / Octave Energy | Animated notes on an octave spiral |
+| Rhythm / Drum Grid / Drum Trail | Kick, snare and hi-hat detection, BPM, a 16-step drum pattern and a timeline |
+| VU Meter / Analog VU | LED or needle VU. Reference level is selectable or automatic |
+| **Piano** | Playing notes light up on a keyboard while a piano roll scrolls above it. Choose from 4 detection modes (below), the key range (37–88 keys), roll speed (1–8 s) and trigger threshold. Fast repeated presses of the same key show up separately |
+| Spotify | Current track, cover art, progress and play/pause/next/previous. Needs the Client ID of your own Spotify Developer app (below) |
+| Media | Track info and controls for any Windows app playing media (browsers, YouTube Music, VLC…) |
+| Window Capture | Live view of a chosen app window (e.g. the video in Spotify) |
 
-### Piyano algılama modları
+### Piano detection modes
 
-| Mod | Nasıl çalışır | Ne zaman |
+| Mode | How it works | Best for |
 |---|---|---|
-| **NMF** (varsayılan) | Spektrumu notaların harmonik şablonlarının toplamı olarak çözer | Anlık tepki. Sentetik akor testinde F1 0,98 |
-| **Model** | Spotify'ın açık kaynak [basic-pitch](https://github.com/spotify/basic-pitch) sinir ağı (ONNX). Son 2 sn sesi saniyede ~12 kez işler | Gerçek kayıtlarda en temiz sonuç, bas notalarını da bulur. İsteğe bağlı kurulum ister |
-| Filtre | Harmonikleri eleyen basit tepe filtresi | Hafif |
-| Ham | Tüm yarım ton tepeleri | Hata ayıklama |
+| **NMF** (default) | Solves the spectrum as a sum of the notes' harmonic templates | Instant response. F1 0.98 on a synthetic chord test |
+| **Model** | Spotify's open-source [basic-pitch](https://github.com/spotify/basic-pitch) neural network (ONNX). Processes the last 2 s of audio ~12 times a second | Cleanest result on real recordings, including bass notes. Needs an optional install |
+| Filter | Simple peak filter that drops harmonics | Lightweight |
+| Raw | Every semitone peak | Debugging |
 
-![Piyano: solda NMF, sağda Model](screenshots/piano.png)
+![Piano: NMF on the left, Model on the right](screenshots/piano.png)
 
-**Diğer:**
-- **Kaldığı yerden açılır:** Pencere boyutu, paneller, her panelin ayarları, tema ve ses cihazı kapanışta (ve 10 saniyede bir) `~/.falcon_audio/state.json` dosyasına kaydedilir. Son cihaz hâlâ bağlıysa açılışta sormadan başlar. Sıfırdan başlamak için bu dosyayı sil.
-- 6 tema: Falcon, Analog Amber, Neon Cyan, Fosfor Yeşil, Synthwave, **Retro Analog**
-- Kick vuruşunda pencere kenarlarında parlama
-- **ASUS TUF klavye RGB:** Klavye ışığı kick'e, notaya ya da ses seviyesine tepki verir. Sadece ASUS TUF laptoplarda çalışır, diğer bilgisayarlarda kendini kapatır.
+**Also:**
+- **Picks up where you left off:** Window size, panels, each panel's settings, theme and audio device are saved to `~/.falcon_audio/state.json` on exit (and every 10 seconds). If the last device is still connected, the app starts without asking. Delete that file to start fresh.
+- **English / Turkish interface:** Switch with the EN / TR menu in the top bar. The app restarts with the same layout. On first launch it follows the Windows language.
+- 6 themes: Falcon, Analog Amber, Neon Cyan, Phosphor Green, Synthwave, **Retro Analog**
+- Window edges glow on each kick drum hit
+- **ASUS TUF keyboard RGB:** The keyboard lighting reacts to the kick, the notes or the volume. Works only on ASUS TUF laptops and turns itself off elsewhere.
 
-| Retro Analog | Neon Cyan | Analog Amber | Synthwave: davul görünümleri |
+| Retro Analog | Neon Cyan | Analog Amber | Synthwave: drum views |
 |---|---|---|---|
 | ![](screenshots/retro-analog.png) | ![](screenshots/neon-cyan.png) | ![](screenshots/analog-amber.png) | ![](screenshots/drums.png) |
 
-## Kurulum
+## Installation
 
-Gereken: **Windows 10/11** ve **Python 3.9+**. Bilgisayarda çalan sesi yakalamak için WASAPI loopback kullanıldığından program macOS ve Linux'ta çalışmaz.
+Requires **Windows 10/11** and **Python 3.9+**. Capturing what the computer plays uses WASAPI loopback, so the app does not run on macOS or Linux.
 
 ```
 pip install -r requirements.txt
 python scope.py
 ```
 
-İsteğe bağlı paketler:
+Optional packages:
 
 ```
 pip install basic-pitch onnxruntime
 pip install winrt-runtime winrt-Windows.Media.Control winrt-Windows.Storage.Streams
 ```
 
-İlki Piyano panelinin "Model" modu, ikincisi Medya paneli için. Kurulu değilse program yine çalışır, sadece o özellik devre dışı kalır.
+The first is for the Piano panel's "Model" mode, the second for the Media panel. Without them the app still runs; only that feature is disabled.
 
-İlk açılışta ses kaynağı seçilir. 🔊 işaretliler bilgisayarda çalan ses, 🎤 işaretliler mikrofon. Kaynak sonradan **CİHAZ** düğmesiyle değiştirilebilir.
+On first launch you choose an audio source. 🔊 marks audio playing on the computer, 🎤 marks microphones. Change it later with the **DEVICE** button.
 
-Tema yazı tipi [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch) (Google Fonts). Yüklü değilse Segoe UI kullanılır.
+The theme font is [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch) (Google Fonts). Segoe UI is used if it is not installed.
 
-### Spotify paneli
+### Spotify panel
 
-1. [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) adresinde bir uygulama oluştur.
-2. Redirect URI olarak `http://127.0.0.1:8888/callback` ekle.
-3. Paneldeki giriş düğmesine bas ve **Client ID**'yi yapıştır. Tarayıcıda Spotify'a giriş yapılır. PKCE kullanıldığı için Client Secret gerekmez.
+1. Create an app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
+2. Add `http://127.0.0.1:8888/callback` as a Redirect URI.
+3. Press the connect button in the panel and paste the **Client ID**. You log in to Spotify in your browser. It uses PKCE, so no Client Secret is needed.
 
-Client ID ve oturum anahtarı sadece kendi bilgisayarında, `~/.falcon_audio/spotify.json` dosyasında tutulur. Bu dosyayı kimseyle paylaşma, repoya da ekleme.
+The Client ID and session token are stored only on your own computer, in `~/.falcon_audio/spotify.json`. Don't share that file or add it to a repo.
 
-## Bilinen sınırlar
+## Known limitations
 
-- Melodi ve akor algılama tam bir mikste yaklaşıktır. Vokal ile enstrümanlar karışabilir. Sade vokal ya da solo kayıtlarda daha temiz sonuç verir.
-- Piyano "Model" modu yaklaşık 0,1–0,2 sn geriden gelir ve işlemciye ek yük bindirir.
-- 170+ BPM'lik şarkılarda tempo yarısı olarak gösterilebilir.
-- C1 ile ~D#2 arasındaki notalar FFT çözünürlüğü yetmediği için gösterilmez.
-- Klavye RGB özelliği belgelenmemiş bir ASUS arayüzünü kullanır, Armoury Crate ile çakışabilir.
+- Melody and chord detection on a full mix is approximate. Vocals and instruments can get mixed up. Results are cleaner on isolated vocals or solo recordings.
+- The Piano "Model" mode lags by about 0.1–0.2 s and adds CPU load.
+- Songs above 170 BPM may show half the tempo.
+- Notes between C1 and ~D#2 are not shown, because the FFT resolution is not fine enough.
+- Keyboard RGB uses an undocumented ASUS interface and may conflict with Armoury Crate.
 
-## Test modu
+## Test mode
 
-`SCOPE_AUTOTEST=1` ortam değişkeni ayarlıysa program cihaz seçme penceresini atlar ve 5 saniye sonra kendini kapatır. Otomatik testler için kullanılır.
+With the environment variable `SCOPE_AUTOTEST=1`, the app skips the device dialog and closes itself after 5 seconds. Used for automated tests. Set `FALCON_LANG=en` or `tr` to force the interface language when there is no saved state.

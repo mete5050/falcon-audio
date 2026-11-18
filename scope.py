@@ -94,10 +94,10 @@ def list_devices():
         if d["hostApi"] != wasapi["index"] or d["maxInputChannels"] < 1:
             continue
         lb = d.get("isLoopbackDevice", False)
-        label = ("🔊 Calan ses: " if lb else "🎤 Giris: ") + d["name"].replace(" [Loopback]", "")
+        label = (T("🔊 Calan ses: ") if lb else T("🎤 Giris: ")) + d["name"].replace(" [Loopback]", "")
         label += f"  ({int(d['defaultSampleRate'])} Hz)"
         default = lb and out["name"] in d["name"]
-        devs.append((0 if default else (1 if lb else 2), label + ("  ★ varsayilan" if default else ""), d))
+        devs.append((0 if default else (1 if lb else 2), label + (T("  ★ varsayilan") if default else ""), d))
     devs.sort(key=lambda x: x[0])
     return [(l, d) for _, l, d in devs]
 
@@ -114,6 +114,128 @@ def open_stream(dev):
                     input_device_index=dev["index"], frames_per_buffer=256,
                     stream_callback=cb)
     print(f"Yakalanan cihaz: {dev['name']}  {RATE} Hz, {CH} kanal")
+
+# ---------------- DIL (TR / EN) ----------------
+LANG = "tr"          # acilista state.json / sistem dilinden ayarlanir; degisince uygulama yeniden baslar
+EN = {
+    # cihaz
+    "🔊 Calan ses: ": "🔊 Playback: ", "🎤 Giris: ": "🎤 Input: ", "  ★ varsayilan": "  ★ default",
+    "FALCON // Ses kaynagi sec": "FALCON // Choose audio source", "SES KAYNAGI SEC": "CHOOSE AUDIO SOURCE",
+    "🔊 = bilgisayarda calan ses (Spotify vb.)   🎤 = mikrofon / hat girisi":
+        "🔊 = audio playing on this PC (Spotify etc.)   🎤 = microphone / line in",
+    "BASLAT": "START",
+    # ust cubuk
+    "FALCON // Ses Gorsellestirici": "FALCON // Audio Visualizer", "Tema": "Theme", "Dil": "Language",
+    "Arayuz dili (degisince uygulama yeniden baslar)": "Interface language (the app restarts on change)",
+    "Nota hizi": "Note speed", "Cok hizli (1024)": "Very fast (1024)", "Hizli (2048)": "Fast (2048)",
+    "Dengeli (4096)": "Balanced (4096)", "Hassas (8192)": "Precise (8192)",
+    "Dusus": "Decay", "Ani": "Instant", "Hizli": "Fast", "Orta": "Medium", "Yavas": "Slow",
+    " sn": " s", "CIHAZ": "DEVICE", "FLAS: ": "FLASH: ", "ACIK": "ON", "KAPALI": "OFF",
+    "Kick vurusunda pencere kenarlarinda beyaz parlama": "White glow on the window edges on each kick",
+    "Parlama siddeti": "Glow intensity", "Klavye": "Keyboard", "Kapali": "Off", "Kick flasi": "Kick flash",
+    "Nota rengi": "Note color", "VU parlakligi": "VU brightness",
+    "ASUS TUF klavye isigi muzige tepki versin (renk kaydedilmez)":
+        "ASUS TUF keyboard lighting reacts to the music (color is not saved)",
+    "Bu bilgisayarda ASUS klavye RGB erisimi yok": "No ASUS keyboard RGB access on this computer",
+    "Kapatilan bir paneli geri ac": "Reopen a closed panel", "SIFIRLA": "RESET", "Yerlesimi sifirla": "Reset layout",
+    "nota gecikmesi": "note latency",
+    "Paneli kapat (ust cubuktaki + PANEL ile geri gelir)": "Close panel (bring it back with + PANEL in the top bar)",
+    # temalar
+    "Fosfor Yesil": "Phosphor Green",
+    "8 sn": "8 s", "5 sn": "5 s", "3 sn": "3 s", "2 sn": "2 s", "1 sn": "1 s",
+    # gorunum adlari
+    "Osiloskop": "Oscilloscope", "Spektrum": "Spectrum", "Kromagram": "Chromagram",
+    "Genis Kromagram": "Wide Chromagram", "Melodi Izi": "Melody Trail", "Davul Izgarasi": "Drum Grid",
+    "Nota x Oktav": "Note x Octave", "Oktav Enerjisi": "Octave Energy", "Oktav Sarmali": "Octave Spiral",
+    "Ritim (Bas/Davul)": "Rhythm (Bass/Drums)", "VU Metre": "VU Meter", "Analog VU (ibreli)": "Analog VU (needle)",
+    "CRT Osiloskop": "CRT Oscilloscope", "LED Spektrum (31 bant)": "LED Spectrum (31 bands)",
+    "Davul Izi": "Drum Trail", "Medya": "Media", "Medya (tum uygulamalar)": "Media (all apps)",
+    "Pencere Yakalama": "Window Capture", "Piyano": "Piano",
+    # panel ayarlari
+    "Otomatik C3-F#7": "Auto C3-F#7", "Bas C2-B3": "Bass C2-B3", "Erkek vokal C3-B4": "Male vocal C3-B4",
+    "Kadin vokal C4-B5": "Female vocal C4-B5", "Yuksek C5-B6": "High C5-B6",
+    "Oktav 2": "Octave 2", "Oktav 3": "Octave 3", "Oktav 4": "Octave 4", "Oktav 5": "Octave 5", "Oktav 6": "Octave 6",
+    "Bu panelin perde aradigi aralik": "Pitch range this panel searches",
+    "Tum oktavlar 1-7": "All octaves 1-7", "Otomatik 3 oktav": "Auto 3 octaves", "Otomatik 4 oktav": "Auto 4 octaves",
+    "Otomatik": "Auto", "0 VU = -10 dBFS (modern)": "0 VU = -10 dBFS (modern)",
+    "0 VU = -14 dBFS (Spotify)": "0 VU = -14 dBFS (Spotify)", "0 VU = -18 dBFS (stüdyo)": "0 VU = -18 dBFS (studio)",
+    "0 VU = -6 dBFS (çok yüksek)": "0 VU = -6 dBFS (very loud)",
+    "0 VU'nun karsiligi: sarki surekli tepedeyse daha yuksek (-10 / -6) sec":
+        "What 0 VU means: pick a higher one (-10 / -6) if the song keeps pinning the meter",
+    "Hangi uygulamanin medyasi gosterilsin": "Which app's media to show",
+    "61 tus C2-C7": "61 keys C2-C7", "49 tus C3-C7": "49 keys C3-C7", "37 tus C3-C6": "37 keys C3-C6",
+    "88 tus A0-C8": "88 keys A0-C8", "Filtre": "Filter", "Ham": "Raw",
+    "Esik: cok hassas": "Threshold: very low", "Esik: hassas": "Threshold: low", "Esik: normal": "Threshold: normal",
+    "Esik: secici": "Threshold: high", "Esik: cok secici": "Threshold: very high",
+    "Ham: tum tepeler | Filtre: harmonikleri ele | NMF: harmonik sablon cozumu":
+        "Raw: all peaks | Filter: drop harmonics | NMF: harmonic template solve | Model: Spotify basic-pitch",
+    "Rulonun gosterdigi sure: kisa = notalar daha hizli akar": "Time span of the roll: shorter = notes scroll faster",
+    "Tetik genligi: hassas = zayif notalar da yanar, secici = sadece guclu notalar":
+        "Trigger level: low = quiet notes light up too, high = only strong notes",
+    # cizimdeki yazilar
+    "saniye": "seconds", "saniye once": "seconds ago", "AKOR ~ ": "CHORD ~ ", "OKTAV ": "OCTAVE ",
+    "  (otomatik)": "  (auto)", "Tempo araniyor…": "Finding tempo…", "olcu": "bar", "Okt ": "Oct ",
+    "Agirlik merkezi: oktav ": "Center of mass: octave ",
+    # spotify / medya / pencere
+    "BAGLAN": "CONNECT", "Spotify hesabina baglan": "Connect your Spotify account",
+    "Spotify'a baglan": "Connect to Spotify",
+    "developer.spotify.com/dashboard'da olusturdugun uygulamanin Client ID'si:\n(Redirect URI olarak  http://127.0.0.1:8888/callback  ekli olmali)":
+        "Client ID of the app you created at developer.spotify.com/dashboard:\n(it must have  http://127.0.0.1:8888/callback  as a Redirect URI)",
+    "FALCON//AUDIO Spotify'a baglandi. Bu sekmeyi kapatabilirsin.": "FALCON//AUDIO is connected to Spotify. You can close this tab.",
+    "Baglanti reddedildi.": "Connection was denied.",
+    "giris bekleniyor (tarayicida izin ver)": "waiting for login (allow it in the browser)",
+    "hata: 8888 portu kullanimda": "error: port 8888 is in use",
+    "Kontrol icin Spotify Premium gerekli": "Playback control needs Spotify Premium",
+    "Aktif Spotify cihazi yok": "No active Spotify device",
+    "Şu an bir şey çalmıyor": "Nothing is playing right now",
+    "Bağlı değil. Başlıktaki BAĞLAN düğmesine bas.": "Not connected. Press CONNECT in the panel header.",
+    "Bu uygulama bu kontrolu desteklemiyor": "This app does not support that control",
+    "Pencere araniyor…": "Looking for the window…",
+    "Pencere kucultulmus - geri ac (arkada kalmasi sorun degil)": "Window is minimized - restore it (being behind other windows is fine)",
+}
+EN_PREFIX = {   # degisken kuyruklu mesajlar: bastaki kalip cevrilir, kalani aynen kalir
+    "giris iptal / reddedildi: ": "login cancelled / denied: ", "token alinamadi ": "could not get token ",
+    "oturum yenilenemedi ": "could not refresh session ", "API hatasi ": "API error ", "ag hatasi: ": "network error: ",
+    "Kontrol hatasi ": "Control error ", "medya oturumu kullanilamiyor: ": "media session unavailable: ",
+    "medya hatasi: ": "media error: ", "yakalama hatasi: ": "capture error: ",
+}
+EN_SUFFIX = {" penceresi bulunamadi": " window not found", " - yeniden baglan": " - reconnect", "zaman asimi": "timed out"}
+
+def T(s):
+    """Arayuz metnini secili dile cevir (TR -> EN). Bilinmeyen metin aynen doner."""
+    if LANG != "en" or not isinstance(s, str) or not s:
+        return s
+    if s in EN:
+        return EN[s]
+    for k, v in EN_PREFIX.items():
+        if s.startswith(k):
+            s = v + s[len(k):]; break
+    for k, v in EN_SUFFIX.items():
+        if s.endswith(k):
+            s = s[:-len(k)] + v
+    return s
+
+def tr_tree(root):
+    """Bir pencere/panel agacindaki statik metinleri (etiket, dugme, menu ogesi, ipucu, birim) cevirir."""
+    if LANG != "en":
+        return
+    ws = [root] + root.findChildren(QtWidgets.QWidget)
+    for w in ws:
+        if w.toolTip():
+            w.setToolTip(T(w.toolTip()))
+        if isinstance(w, (QtWidgets.QLabel, QtWidgets.QAbstractButton)) and w.text():
+            n = T(w.text())
+            if n != w.text():
+                w.setText(n)
+        elif isinstance(w, QtWidgets.QComboBox):
+            w.blockSignals(True)
+            for i in range(w.count()):
+                w.setItemText(i, T(w.itemText(i)))
+            w.blockSignals(False)
+        elif isinstance(w, QtWidgets.QSpinBox) and w.suffix():
+            w.setSuffix(T(w.suffix()))
+        if w.isWindow() and w.windowTitle():
+            w.setWindowTitle(T(w.windowTitle()))
 
 RING = 1 << 18           # ~5.5 sn @48k (Piyano Model modu 2 sn gecmis ister)
 ring = np.zeros((RING, 2), dtype=np.float32)
@@ -695,7 +817,7 @@ class ChromaView(View):
         self.bars.setOpts(height=ch, brushes=[self.btop if i == top else self.bq[int(ch[i] * 31)]
                                               for i in range(12)])
         n, s = guess_chord(ch)
-        self.txt.setText(f"AKOR ~ {n}  ({s:.2f})" if n else "")
+        self.txt.setText(f"{T('AKOR ~ ')}{n}  ({s:.2f})" if n else "")
 
 class WideChromaView(View):
     """Genis kromagram: oktavlar yan yana tek uzun cubuk dizisi.
@@ -745,7 +867,7 @@ class WideChromaView(View):
                 if i in names:
                     t.append((12 * k + i, f"{nm}{self.lo + k}" if i == 0 else nm))
         self.pl.getAxis("bottom").setTicks([t])
-        self.title.setText(f"OKTAV {self.lo}–{self.lo + self.N_OCT - 1}" + ("  (otomatik)" if self.auto else ""))
+        self.title.setText(f"{T('OKTAV ')}{self.lo}–{self.lo + self.N_OCT - 1}" + (T("  (otomatik)") if self.auto else ""))
     def update(self, A):
         semi = A["semi"]
         g = semi[MIDI_LO:MIDI_HI + 1].reshape(-1, 12)
@@ -780,7 +902,7 @@ class MelodyView(View):
     CONF = 0.2                                 # bu guvenin altindaki olcumler cizilmez
     def __init__(self):
         super().__init__()
-        self.pl.setXRange(-self.SPAN, 0, padding=0); self.pl.setLabel("bottom", "saniye")
+        self.pl.setXRange(-self.SPAN, 0, padding=0); self.pl.setLabel("bottom", T("saniye"))
         self.pl.getViewBox().setMouseEnabled(x=False, y=True)
         self.pl.getViewBox().setLimits(yMin=self.LO - 2, yMax=self.HI + 2, minYRange=1)
         self.pl.setYRange(54, 70, padding=0)
@@ -931,7 +1053,7 @@ class DrumGridView(View):
         # vurus algilama + tempo arka plandaki BeatTracker'da, ses zamaniyla (FPS'ten bagimsiz)
         bpm, beat0, hits = tracker.snapshot()
         if bpm is None:
-            self.info.setText("Tempo araniyor…")
+            self.info.setText(T("Tempo araniyor…"))
             return
         now = now_audio()
         beat = 60 / bpm
@@ -968,7 +1090,7 @@ class DrumGridView(View):
         s = int(pos) % 16
         if s != self.cur_step:
             self.cur_step = s; self.play.setRegion((s - 0.5, s + 0.5))
-            self.info.setText(f"{bpm:.0f} BPM   olcu {bar % 1000 + 1}")
+            self.info.setText(f"{bpm:.0f} BPM   {T('olcu')} {bar % 1000 + 1}")
         if self.dirty:                                     # sadece degisince yeniden boya
             self.dirty = False
             g = self.grid.ravel()
@@ -1032,7 +1154,7 @@ class WaterfallView(View):
         self.img.setRect(QtCore.QRectF(self.lf[0], 0, self.lf[-1] - self.lf[0], WF_SEC_MAX))
         self.pl.addItem(self.img); self.pl.invertY(True)
         self.pl.showGrid(x=True, y=True, alpha=0.15)
-        self.pl.setLabel("left", "saniye once")
+        self.pl.setLabel("left", T("saniye once"))
         set_hz_ticks(self.pl.getAxis("bottom"))
         vb = self.pl.getViewBox()
         vb.setMouseEnabled(x=False, y=True)
@@ -1066,7 +1188,7 @@ class OctaveEnergyView(View):
         n = OCT_HI - OCT_LO + 1
         self.x = np.arange(OCT_LO, OCT_HI + 1)
         self.pl.setYRange(0, 1.05); self.pl.setMouseEnabled(False, False)
-        self.pl.getAxis("bottom").setTicks([[(o, f"Okt {o}") for o in self.x]])
+        self.pl.getAxis("bottom").setTicks([[(o, f"{T('Okt ')}{o}") for o in self.x]])
         self.bars = pg.BarGraphItem(x=self.x, height=np.zeros(n), width=0.75, brush=RED, pen=None)
         self.peak = pg.ScatterPlotItem(symbol="s", size=10, brush=FG, pen=None)
         self.pl.addItem(self.bars); self.pl.addItem(self.peak)
@@ -1082,7 +1204,7 @@ class OctaveEnergyView(View):
         w = g.sum(axis=1)
         if w.sum() > 0.05:
             c = (w * self.x).sum() / w.sum()
-            self.cen.setText(f"Agirlik merkezi: oktav {c:.2f}")
+            self.cen.setText(f"{T('Agirlik merkezi: oktav ')}{c:.2f}")
 
 class SpiralView(View):
     """Oktav sarmali: aci = nota, yaricap = oktav. Aktif notalar parlar,
@@ -1550,7 +1672,7 @@ class DrumTrailView(View):
         pl = self.pl; pl.setMouseEnabled(False, False); pl.showGrid(False, False)
         pl.setRange(xRange=(-self.SPAN, 0.15), yRange=(-0.6, 2.6), padding=0)
         pl.getAxis("left").setTicks([[(2 - i, n) for i, (n, _, _) in enumerate(self.LANES)]])
-        pl.setLabel("bottom", "saniye")
+        pl.setLabel("bottom", T("saniye"))
         for y in (0.5, 1.5):
             pl.addItem(pg.InfiniteLine(pos=y, angle=0, pen=pg.mkPen(LINE)))
         self.beats = pl.plot(pen=pg.mkPen(*rgb(MUTED), 45), connect="pairs")
@@ -1587,7 +1709,7 @@ class DrumTrailView(View):
             self.beats.setData(*pairs(xs[ks % 4 != 0])); self.bars.setData(*pairs(xs[ks % 4 == 0]))
             self.info.setText(f"{bpm:.0f} BPM")
         else:
-            self.beats.setData([], []); self.bars.setData([], []); self.info.setText("Tempo araniyor…")
+            self.beats.setData([], []); self.bars.setData([], []); self.info.setText(T("Tempo araniyor…"))
 
 
 # ---------------- SPOTIFY (Web API, OAuth PKCE) ----------------
@@ -1659,8 +1781,8 @@ class SpotifyClient:
                 s.send_response(200); s.send_header("Content-Type", "text/html; charset=utf-8"); s.end_headers()
                 ok = "code" in q
                 s.wfile.write(("<h2 style='font-family:sans-serif'>" +
-                               ("FALCON//AUDIO Spotify'a baglandi. Bu sekmeyi kapatabilirsin." if ok
-                                else "Baglanti reddedildi.") + "</h2>").encode())
+                               (T("FALCON//AUDIO Spotify'a baglandi. Bu sekmeyi kapatabilirsin.") if ok
+                                else T("Baglanti reddedildi.")) + "</h2>").encode())
             def log_message(s, *a): pass
         try:
             srv = http.server.HTTPServer(("127.0.0.1", 8888), H)
@@ -1809,9 +1931,9 @@ class SpotifyView(View):
                 spotify.start()
     def connect(self):
         cid, ok = QtWidgets.QInputDialog.getText(
-            self.widget, "Spotify'a baglan",
-            "developer.spotify.com/dashboard'da olusturdugun uygulamanin Client ID'si:\n"
-            "(Redirect URI olarak  http://127.0.0.1:8888/callback  ekli olmali)",
+            self.widget, T("Spotify'a baglan"),
+            T("developer.spotify.com/dashboard'da olusturdugun uygulamanin Client ID'si:\n"
+              "(Redirect URI olarak  http://127.0.0.1:8888/callback  ekli olmali)"),
             text=spotify.cfg.get("client_id", ""))
         if ok and cid.strip():
             spotify.login(cid)
@@ -1823,10 +1945,10 @@ class SpotifyView(View):
         s = self.src.get()
         st = s.get("status", "")
         if st != "bagli" or not s.get("title"):
-            self.title.setText(("Spotify" if self.src is spotify else "Medya")
-                               if st != "bagli" else "Şu an bir şey çalmıyor")
+            self.title.setText(T(("Spotify" if self.src is spotify else "Medya")
+                                 if st != "bagli" else "Şu an bir şey çalmıyor"))
             msg = {"baglanmadi": "Bağlı değil. Başlıktaki BAĞLAN düğmesine bas."}.get(st, st)
-            self.status.setText(msg + ("  " + s.get("note", "") if s.get("note") else ""))
+            self.status.setText(T(msg) + ("  " + T(s.get("note", "")) if s.get("note") else ""))
             if st != "bagli":
                 self.artist.setText(""); self.album.setText("")
             return
@@ -1839,7 +1961,7 @@ class SpotifyView(View):
             self.playing = s["playing"]; self.b_play.setIcon(self.ic["pause" if self.playing else "play"])
         self.bar.setValue(int(1000 * prog / max(1, s["duration"])))
         self.t0.setText(self.fmt(prog)); self.t1.setText(self.fmt(s["duration"]))
-        self.status.setText(s.get("note", ""))
+        self.status.setText(T(s.get("note", "")))
         if s.get("art") and id(s["art"]) != self.art_key or (self.art_key and self.art.pixmap() and
                                                                self.art.pixmap().width() != min(self.art.width(), self.art.height())):
             self.art_key = id(s.get("art"))
@@ -1965,7 +2087,7 @@ class WindowCaptureView(View):
             ("Firefox", "firefox.exe"), ("YouTube Music", "youtube music.exe"), ("VLC", "vlc.exe")]
     FPS = 20
     def __init__(self):
-        self.widget = QtWidgets.QLabel("Pencere araniyor…"); self.widget.setAlignment(QtCore.Qt.AlignCenter)
+        self.widget = QtWidgets.QLabel(T("Pencere araniyor…")); self.widget.setAlignment(QtCore.Qt.AlignCenter)
         self.widget.setStyleSheet(f"background:#000; color:{MUTED};")
         self.widget.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
         self.extra = QtWidgets.QComboBox(); self.extra.addItems([a for a, _ in self.APPS])
@@ -2036,7 +2158,7 @@ class WindowCaptureView(View):
         if img is not None:
             self.widget.setPixmap(QtGui.QPixmap.fromImage(img))
         elif msg and self.widget.text() != msg:
-            self.widget.setPixmap(QtGui.QPixmap()); self.widget.setText(msg)
+            self.widget.setPixmap(QtGui.QPixmap()); self.widget.setText(T(msg))
 
 
 class _PianoWidget(QtWidgets.QWidget):
@@ -2280,7 +2402,7 @@ class PianoView(View):
         self.held = np.where(cand, v, self.held * 0.85)
         return np.where(self.active, np.maximum(self.held, 0.15), 0.0)
     def notes(self, A):
-        mode = self.c_mode.currentText()
+        mode = self.MODES[self.c_mode.currentIndex()]
         semi = A["semi"]
         if mode == "Ham":
             return self.raw(semi)
@@ -2331,7 +2453,7 @@ class PianoView(View):
         # --- yeniden basis: kisa pencereli (~40 ms) nota enerjisi, 10 ms adim, FPS'ten bagimsiz
         # nota "aktif" olmadan (2 kare) once gelen vuruslari ~80 ms beklet
         src_ons = self.onset_scan()
-        if self.c_mode.currentText() == "Model":
+        if self.MODES[self.c_mode.currentIndex()] == "Model":
             src_ons = getattr(self, "m_ons", np.zeros(128, bool))
         self.pend = np.where(src_ons, 4, np.maximum(getattr(self, "pend", np.zeros(128)) - 1, 0))
         ons = (self.pend > 0) & (v > 0); self.pend[ons] = 0
@@ -2398,6 +2520,10 @@ class Panel(QtWidgets.QFrame):
             p.setPen(QtGui.QPen(QtGui.QColor("#2a1f12"), 1.4))
             p.drawLine(QtCore.QPointF(cx - 3, cy + 1.5), QtCore.QPointF(cx + 3, cy - 1.5))
         p.end()
+    def vname(self):
+        return VIEWS[self.combo.currentIndex()].name              # dil bagimsiz ic ad
+    def set_vname(self, name):
+        self.combo.setCurrentIndex([v.name for v in VIEWS].index(name))
     def set_view(self, i):
         if self.view:
             self.view.dispose()
@@ -2408,6 +2534,7 @@ class Panel(QtWidgets.QFrame):
         if self.view.extra is not None:            # gorunume ozel ayar (orn. melodi oktavi)
             self.head.insertWidget(2, self.view.extra)
         self.dot.setStyleSheet(f"color:{RED};")
+        tr_tree(self)
 
 def build_qss():
     return f"""
@@ -2501,15 +2628,20 @@ class EdgeGlow(QtWidgets.QWidget):
 class Main(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FALCON // Ses Gorsellestirici")
+        self.setWindowTitle(T("FALCON // Ses Gorsellestirici"))
         self.resize(1500, 950)
         self.an = Analyzer()
         tb = QtWidgets.QToolBar(); tb.setMovable(False); self.addToolBar(tb)
         b = QtWidgets.QLabel("FALCON<span style='color:%s'>//</span>AUDIO" % RED)
         b.setObjectName("brand"); tb.addWidget(b); self.brand = b
         self.c_theme = QtWidgets.QComboBox(); self.c_theme.addItems(list(THEMES))
-        self.c_theme.setToolTip("Tema"); self.c_theme.currentTextChanged.connect(self.set_theme)
-        tb.addWidget(self.c_theme); tb.addSeparator()
+        self.c_theme.setToolTip("Tema")
+        self.c_theme.currentIndexChanged.connect(lambda i: self.set_theme(list(THEMES)[i]))
+        tb.addWidget(self.c_theme)
+        self.c_lang = QtWidgets.QComboBox(); self.c_lang.addItems(["TR", "EN"])
+        self.c_lang.setCurrentIndex(1 if LANG == "en" else 0); self.c_lang.setToolTip("Arayuz dili (degisince uygulama yeniden baslar)")
+        self.c_lang.currentIndexChanged.connect(self.set_lang)
+        tb.addWidget(self.c_lang); tb.addSeparator()
         def lab(t):
             l = QtWidgets.QLabel(t); l.setObjectName("muted"); tb.addWidget(l)
         lab("FFT"); self.c_big = QtWidgets.QComboBox()
@@ -2530,10 +2662,10 @@ class Main(QtWidgets.QMainWindow):
         self.dev_lbl = QtWidgets.QLabel(""); self.dev_lbl.setObjectName("muted"); tb.addWidget(self.dev_lbl)
         sp = QtWidgets.QWidget(); sp.setObjectName("spacer"); sp.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
                                                    QtWidgets.QSizePolicy.Preferred); tb.addWidget(sp)
-        self.b_flash = QtWidgets.QPushButton("FLAS: ACIK"); self.b_flash.setCheckable(True)
+        self.b_flash = QtWidgets.QPushButton(T("FLAS: ") + T("ACIK")); self.b_flash.setCheckable(True)
         self.b_flash.setChecked(True); self.b_flash.setObjectName("toggle")
         self.b_flash.setToolTip("Kick vurusunda pencere kenarlarinda beyaz parlama")
-        self.b_flash.toggled.connect(lambda on: self.b_flash.setText("FLAS: " + ("ACIK" if on else "KAPALI")))
+        self.b_flash.toggled.connect(lambda on: self.b_flash.setText(T("FLAS: ") + T("ACIK" if on else "KAPALI")))
         tb.addWidget(self.b_flash)
         self.s_flash = QtWidgets.QSpinBox()
         self.s_flash.setRange(10, 100); self.s_flash.setSingleStep(10); self.s_flash.setValue(20)
@@ -2573,6 +2705,7 @@ class Main(QtWidgets.QMainWindow):
         l.addWidget(self.vs); self.setCentralWidget(c)
         self.glow = EdgeGlow(c)
         QtCore.QTimer.singleShot(0, self.reset_layout)
+        tr_tree(self)
 
         # Windows'ta normal QTimer ~15.6 ms'ye yuvarlanir -> 15 ms istek ~30 FPS'e duser
         self.t = QtCore.QTimer(); self.t.setTimerType(QtCore.Qt.PreciseTimer)
@@ -2593,12 +2726,12 @@ class Main(QtWidgets.QMainWindow):
         import json, base64
         b64 = lambda ba: base64.b64encode(bytes(ba)).decode()
         st = dict(
-            geom=b64(self.saveGeometry()), theme=self.c_theme.currentText(),
+            geom=b64(self.saveGeometry()), theme=list(THEMES)[self.c_theme.currentIndex()], lang=LANG,
             big=self.c_big.currentIndex(), fast=self.c_fast.currentIndex(), decay=self.c_decay.currentIndex(),
             wf=self.s_wf.value(), flash=self.b_flash.isChecked(), flash_pct=self.s_flash.value(),
             kbd=self.c_kbd.currentIndex(), device=CUR_DEV,
             vs=b64(self.vs.saveState()), rows=[b64(r.saveState()) for r in self.rows],
-            panels=[dict(view=pn.combo.currentText(), hidden=pn.isHidden(),
+            panels=[dict(view=pn.vname(), hidden=pn.isHidden(),
                          extra=[c.currentIndex() for c in self._combos(pn.view)]) for pn in self.panels])
         try:
             os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
@@ -2617,7 +2750,7 @@ class Main(QtWidgets.QMainWindow):
             except Exception as e:
                 print("durum geri yuklenemedi:", e)
         safe(lambda: self.restoreGeometry(ba(st["geom"])))
-        safe(lambda: self.c_theme.setCurrentText(st["theme"]))
+        safe(lambda: self.c_theme.setCurrentIndex(list(THEMES).index(st["theme"])))
         for w, k in ((self.c_big, "big"), (self.c_fast, "fast"), (self.c_decay, "decay"), (self.c_kbd, "kbd")):
             safe(lambda w=w, k=k: w.setCurrentIndex(st[k]))
         safe(lambda: self.s_wf.setValue(st["wf"]))
@@ -2625,8 +2758,8 @@ class Main(QtWidgets.QMainWindow):
         safe(lambda: self.s_flash.setValue(st["flash_pct"]))
         for pn, ps in zip(self.panels, st.get("panels", [])):
             def one(pn=pn, ps=ps):
-                if pn.combo.currentText() != ps["view"]:
-                    pn.combo.setCurrentText(ps["view"])
+                if pn.vname() != ps["view"]:
+                    pn.set_vname(ps["view"])
                 for c, i in zip(self._combos(pn.view), ps.get("extra", [])):
                     if 0 <= i < c.count():
                         c.setCurrentIndex(i)
@@ -2637,6 +2770,14 @@ class Main(QtWidgets.QMainWindow):
             for r, s in zip(self.rows, st.get("rows", [])):
                 safe(lambda r=r, s=s: r.restoreState(ba(s)))
         QtCore.QTimer.singleShot(60, splitters)             # reset_layout'tan (singleShot 0) SONRA
+    def set_lang(self, i):
+        global LANG
+        LANG = ["tr", "en"][i]
+        self.save_state()                                   # yeni dil + tum yerlesim kaydedilir
+        if not os.environ.get("SCOPE_AUTOTEST"):
+            import sys
+            QtCore.QProcess.startDetached(sys.executable, sys.argv)
+        QtWidgets.QApplication.instance().quit()
     def closeEvent(self, ev):
         self.save_state()
         super().closeEvent(ev)
@@ -2651,8 +2792,8 @@ class Main(QtWidgets.QMainWindow):
                                   "Ritim (Bas/Davul)", "VU Metre"]}.get(name)
         for i, pn in enumerate(self.panels):       # renkler kurulumda okunur -> gorunumleri yeniden kur
             want = retro[i] if retro and i < len(retro) else None
-            if want and pn.combo.currentText() != want:
-                pn.combo.setCurrentText(want)      # set_view'i combo sinyali cagirir
+            if want and pn.vname() != want:
+                pn.set_vname(want)                 # set_view'i combo sinyali cagirir
             else:
                 pn.set_view(pn.combo.currentIndex())
         self.glow.update()
@@ -2752,7 +2893,7 @@ class Main(QtWidgets.QMainWindow):
         self.frames += 1
         if self.clock.elapsed() > 1000:
             lat = self.an.FAST / RATE * 1000
-            self.fps.setText(f"{self.frames} FPS · nota gecikmesi ~{lat:.0f} ms")
+            self.fps.setText(f"{self.frames} FPS · {T('nota gecikmesi')} ~{lat:.0f} ms")
             self.frames = 0; self.clock.restart()
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".falcon_audio", "state.json")
@@ -2782,6 +2923,7 @@ def choose_device(parent=None):
         lst.addItem(label)
     lst.setCurrentRow(0); v.addWidget(lst, 1)
     ok = QtWidgets.QPushButton("BASLAT"); v.addWidget(ok)
+    tr_tree(dlg)
     ok.clicked.connect(dlg.accept); lst.itemDoubleClicked.connect(dlg.accept)
     if not devs or dlg.exec_() != QtWidgets.QDialog.Accepted:
         return None
@@ -2799,6 +2941,8 @@ if __import__("os").path.exists(_ico):
     app.setWindowIcon(QtGui.QIcon(_ico))
 AUTOTEST = os.environ.get("SCOPE_AUTOTEST")          # test: dialogsuz baslat, 5 sn sonra kapan
 STATE = None if AUTOTEST else read_state()
+LANG = (STATE or {}).get("lang") or os.environ.get("FALCON_LANG") or \
+       ("tr" if QtCore.QLocale.system().language() == QtCore.QLocale.Turkish else "en")
 first = None
 if AUTOTEST:
     first = list_devices()[0][1]
