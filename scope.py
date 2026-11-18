@@ -7,9 +7,18 @@ Gorunumler: Osiloskop, Spektrum, Kromagram, Nota x Oktav, Waterfall,
             Oktav Sarmali (animasyon), Oktav Enerjisi
 """
 import os
+import sys
 import threading
 import numpy as np
-import pyaudiowpatch as pyaudio
+# Windows: WASAPI loopback (pyaudiowpatch). macOS / Linux: sounddevice (PortAudio);
+# Mac'te calan sesi yakalamak icin BlackHole gibi sanal bir ses cihazi gerekir (README).
+# FALCON_FORCE_SD=1 -> Windows'ta da sounddevice yolu (Mac yolunu test etmek icin).
+IS_WIN = sys.platform == "win32" and not os.environ.get("FALCON_FORCE_SD")
+if IS_WIN:
+    import pyaudiowpatch as pyaudio
+else:
+    pyaudio = None
+    import sounddevice as sd
 try:                      # PyQt'den ONCE yuklenmeli (Windows DLL cakismasi); Piyano "Model" modu icin
     import onnxruntime as _ort
 except Exception:
@@ -80,11 +89,48 @@ def style_plot(pl, title=None):
     pl.setMenuEnabled(False)
 
 # ---------------- SES YAKALAMA ----------------
-p = pyaudio.PyAudio()
+p = pyaudio.PyAudio() if IS_WIN else None
 RATE, CH = 48000, 2
 stream = None
+PA_CONTINUE = pyaudio.paContinue if IS_WIN else 0
+LOOPBACK_NAMES = ("blackhole", "loopback", "soundflower", "vb-cable", "cable output", "monitor of")
 
 def list_devices():
+    if not IS_WIN:
+        return list_devices_sd()
+    return list_devices_wasapi()
+
+def list_devices_sd():
+    """macOS / Linux: giris cihazlari. Sanal loopback cihazlari (BlackHole vb.) 'calan ses' sayilir ve once gelir."""
+    devs = []
+    for i, d in enumerate(sd.query_devices()):
+        if d["max_input_channels"] < 1:
+            continue
+        lb = any(k in d["name"].lower() for k in LOOPBACK_NAMES)
+        dd = dict(name=d["name"], index=i, defaultSampleRate=d["default_samplerate"],
+                  maxInputChannels=d["max_input_channels"])
+        label = (T("🔊 Calan ses: ") if lb else T("🎤 Giris: ")) + d["name"] + f"  ({int(d['default_samplerate'])} Hz)"
+        devs.append((0 if lb else 2, label, dd))
+    devs.sort(key=lambda x: x[0])
+    return [(l, d) for _, l, d in devs]
+
+def _sd_callback(indata, frames, time_info, status):
+    cb(indata.tobytes(), frames, None, None)
+
+def close_stream():
+    global stream
+    if stream is None:
+        return
+    try:
+        if IS_WIN:
+            stream.stop_stream(); stream.close()
+        else:
+            stream.stop(); stream.close()
+    except Exception as e:
+        print("akis kapatilamadi:", e)
+    stream = None
+
+def list_devices_wasapi():
     """WASAPI loopback (calan ses) + mikrofon/hat girisleri. Varsayilan cikisin loopback'i once."""
     wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)
     out = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
@@ -103,16 +149,20 @@ def list_devices():
 
 def open_stream(dev):
     global stream, RATE, CH, widx, filled, total
-    if stream is not None:
-        stream.stop_stream(); stream.close()
+    close_stream()
     RATE = int(dev["defaultSampleRate"])
     CH = max(1, min(2, dev["maxInputChannels"]))
     with lock:
         ring[:] = 0; widx = 0; filled = 0; total = 0
     tracker.reset()
-    stream = p.open(format=pyaudio.paFloat32, channels=CH, rate=RATE, input=True,
-                    input_device_index=dev["index"], frames_per_buffer=256,
-                    stream_callback=cb)
+    if IS_WIN:
+        stream = p.open(format=pyaudio.paFloat32, channels=CH, rate=RATE, input=True,
+                        input_device_index=dev["index"], frames_per_buffer=256,
+                        stream_callback=cb)
+    else:
+        stream = sd.InputStream(device=dev["index"], channels=CH, samplerate=RATE, dtype="float32",
+                                blocksize=256, callback=_sd_callback)
+        stream.start()
     print(f"Yakalanan cihaz: {dev['name']}  {RATE} Hz, {CH} kanal")
 
 # ---------------- DIL (TR / EN) ----------------
@@ -124,6 +174,8 @@ EN = {
     "🔊 = bilgisayarda calan ses (Spotify vb.)   🎤 = mikrofon / hat girisi":
         "🔊 = audio playing on this PC (Spotify etc.)   🎤 = microphone / line in",
     "BASLAT": "START",
+    "🔊 = BlackHole gibi sanal cihaz (calan ses icin, README)   🎤 = mikrofon / hat girisi":
+        "🔊 = virtual device such as BlackHole (for playback audio, see README)   🎤 = microphone / line in",
     # ust cubuk
     "FALCON // Ses Gorsellestirici": "FALCON // Audio Visualizer", "Tema": "Theme", "Dil": "Language",
     "Arayuz dili (degisince uygulama yeniden baslar)": "Interface language (the app restarts on change)",
@@ -260,7 +312,7 @@ def cb(data, frames, t, status):
         widx = e % RING
         filled = min(RING, filled + n)
         total += n
-    return (None, pyaudio.paContinue)
+    return (None, PA_CONTINUE)
 
 def read_abs(start, n):
     """Mutlak ornek indeksinden n ornek oku (mono). Veri halkadan dustuyse None."""
@@ -2483,6 +2535,8 @@ class PianoView(View):
 
 VIEWS = [ScopeView, SpectrumView, ChromaView, NoteOctaveView, WaterfallView,
          SpiralView, OctaveEnergyView, RhythmView, WideChromaView, MelodyView, DrumGridView, VUMeterView, AnalogVUView, CRTScopeView, LEDSpectrumView, DrumTrailView, SpotifyView, MediaView, WindowCaptureView, PianoView]
+if sys.platform != "win32":                     # Windows medya oturumu ve PrintWindow gerektirir
+    VIEWS = [v for v in VIEWS if v not in (MediaView, WindowCaptureView)]
 
 # ---------------- PANEL + ARAYUZ ----------------
 class Panel(QtWidgets.QFrame):
@@ -2913,7 +2967,8 @@ def choose_device(parent=None):
     dlg.resize(620, 380)
     v = QtWidgets.QVBoxLayout(dlg)
     t = QtWidgets.QLabel("SES KAYNAGI SEC"); t.setObjectName("brand"); v.addWidget(t)
-    h = QtWidgets.QLabel("🔊 = bilgisayarda calan ses (Spotify vb.)   🎤 = mikrofon / hat girisi")
+    h = QtWidgets.QLabel("🔊 = bilgisayarda calan ses (Spotify vb.)   🎤 = mikrofon / hat girisi" if IS_WIN else
+                         "🔊 = BlackHole gibi sanal cihaz (calan ses icin, README)   🎤 = mikrofon / hat girisi")
     h.setObjectName("muted"); v.addWidget(h)
     lst = QtWidgets.QListWidget()
     lst.setStyleSheet(f"QListWidget{{background:{PANEL};border:1px solid {LINE};}}"
@@ -2960,4 +3015,6 @@ if STATE:
     m.load_state(STATE)
 m.show()
 app.exec_()
-stream.stop_stream(); stream.close(); p.terminate()
+close_stream()
+if p is not None:
+    p.terminate()

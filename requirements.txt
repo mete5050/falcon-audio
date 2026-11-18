@@ -1,7 +1,8 @@
 numpy>=1.24
 pyqtgraph>=0.13
 PyQt5>=5.15
-PyAudioWPatch>=0.2.12
-# istege bagli - Piyano paneli 'Model' modu (Spotify basic-pitch, ONNX):
+PyAudioWPatch>=0.2.12; sys_platform == "win32"
+sounddevice>=0.4; sys_platform != "win32"
+# optional - Piano panel "Model" mode (Spotify basic-pitch, ONNX):
 # basic-pitch
 # onnxruntime

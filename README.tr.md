@@ -2,7 +2,7 @@
 
 [English](README.md) | **Türkçe**
 
-Bilgisayarda çalan sesi (Spotify, YouTube, oyun… ne çalarsa) ya da mikrofonu **gerçek zamanlı** görselleştiren masaüstü uygulaması. Tek Python dosyası, Windows.
+Bilgisayarda çalan sesi (Spotify, YouTube, oyun… ne çalarsa) ya da mikrofonu **gerçek zamanlı** görselleştiren masaüstü uygulaması. Tek Python dosyası. Windows ve macOS.
 
 ![Falcon teması](screenshots/falcon.png)
 
@@ -51,12 +51,27 @@ Bilgisayarda çalan sesi (Spotify, YouTube, oyun… ne çalarsa) ya da mikrofonu
 
 ## Kurulum
 
-Gereken: **Windows 10/11** ve **Python 3.9+**. Bilgisayarda çalan sesi yakalamak için WASAPI loopback kullanıldığından program macOS ve Linux'ta çalışmaz.
+Gereken: **Windows 10/11** ya da **macOS** üzerinde **Python 3.9+**.
 
 ```
 pip install -r requirements.txt
 python scope.py
 ```
+
+macOS'ta `pip3` ve `python3` kullan.
+
+### macOS: Mac'te çalan sesi yakalamak
+
+macOS'ta uygulamaların sistem sesini kaydetmesinin hazır bir yolu yok. Bunun için ücretsiz sanal ses sürücüsü **BlackHole** gerekir:
+
+1. Kur: `brew install blackhole-2ch` ya da [existential.audio/blackhole](https://existential.audio/blackhole/) adresinden indir.
+2. **Audio MIDI Setup** (Ses MIDI Ayarı) uygulamasını aç. Sol alttaki **+** ile **Create Multi-Output Device** (Çoklu Çıkış Aygıtı Oluştur) seç. Hem hoparlörünü/kulaklığını hem **BlackHole 2ch**'yi işaretle.
+3. **Sistem Ayarları → Ses → Çıkış**'ta bu Çoklu Çıkış Aygıtı'nı seç. Sesi duymaya devam edersin, BlackHole da bir kopyasını alır.
+4. Programı aç ve cihaz listesinden **🔊 BlackHole 2ch**'yi seç.
+
+BlackHole olmadan da mikrofon görselleştirilebilir. macOS'ta Medya ve Pencere Yakalama panelleri yok (Windows altyapısı kullanıyorlar). Klavye RGB özelliği zaten sadece ASUS'ta çalışıyor. Çoklu Çıkış Aygıtı'nda ses tuşları çalışmaz, sesi her uygulamanın kendi içinden ayarla.
+
+> macOS sürümü şimdilik sadece aynı kod yolunun Windows'ta çalıştırılmasıyla test edildi. Mac'te bir sorun çıkarsa lütfen issue aç.
 
 İsteğe bağlı paketler:
 

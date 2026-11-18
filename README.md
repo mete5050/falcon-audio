@@ -2,7 +2,7 @@
 
 **English** | [Türkçe](README.tr.md)
 
-A desktop app that visualizes whatever your computer is playing (Spotify, YouTube, games…) or your microphone, **in real time**. A single Python file, Windows only.
+A desktop app that visualizes whatever your computer is playing (Spotify, YouTube, games…) or your microphone, **in real time**. A single Python file. Windows and macOS.
 
 ![Falcon theme](screenshots/falcon.png)
 
@@ -51,12 +51,27 @@ A desktop app that visualizes whatever your computer is playing (Spotify, YouTub
 
 ## Installation
 
-Requires **Windows 10/11** and **Python 3.9+**. Capturing what the computer plays uses WASAPI loopback, so the app does not run on macOS or Linux.
+Requires **Python 3.9+** on **Windows 10/11** or **macOS**.
 
 ```
 pip install -r requirements.txt
 python scope.py
 ```
+
+On macOS use `pip3` and `python3`.
+
+### macOS: capturing what the Mac plays
+
+macOS has no built-in way for apps to record system audio, so you need the free virtual audio driver **BlackHole**:
+
+1. Install it: `brew install blackhole-2ch`, or download it from [existential.audio/blackhole](https://existential.audio/blackhole/).
+2. Open **Audio MIDI Setup**, press **+** at the bottom left and choose **Create Multi-Output Device**. Tick both your speakers/headphones and **BlackHole 2ch**.
+3. In **System Settings → Sound → Output**, select that Multi-Output Device. You keep hearing the sound, and BlackHole gets a copy.
+4. Start the app and pick **🔊 BlackHole 2ch** in the device list.
+
+Without BlackHole you can still visualize a microphone. On macOS the Media and Window Capture panels are not available (they use Windows APIs), and the keyboard RGB feature is ASUS-only. Volume keys don't work on a Multi-Output Device; change the volume in each app instead.
+
+> The macOS version has been tested only by running the same code path on Windows. If something breaks on a Mac, please open an issue.
 
 Optional packages:
 
